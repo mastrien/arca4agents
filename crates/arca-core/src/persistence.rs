@@ -1,13 +1,15 @@
 use std::path::Path;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Context};
 use chrono::NaiveDate;
 use include_dir::{include_dir, Dir};
+use rusqlite::functions::FunctionFlags;
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction, TransactionBehavior};
 use rusqlite_migration::Migrations;
 
+use crate::clock::Hlc;
 use crate::dates::DATE_FORMAT;
 
 // Embed the entire migrations directory into the binary at compile-time
@@ -18,12 +20,14 @@ static MIGRATIONS: LazyLock<Migrations<'static>> =
 
 pub const META_LAST_ROLLOVER: &str = "last_rollover_date";
 pub const META_ACTIVE_WINDOW: &str = "active_window_minutes";
+pub const META_DEVICE_ID: &str = "device_id";
 
 pub const USER: &str = "user";
 pub const AGENT_PREFIX: &str = "agent:";
 
 pub struct Database {
   conn: Connection,
+  clock: Arc<Mutex<Hlc>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -314,6 +318,21 @@ fn date_to_sql(date: Option<NaiveDate>) -> Option<String> {
   date.map(|d| d.format(DATE_FORMAT).to_string())
 }
 
+pub fn new_uuid() -> String {
+  uuid::Uuid::new_v4().to_string()
+}
+
+/// `arca_uuid()` e `arca_clock()`, usadas pelos triggers de sincronização.
+fn register_sync_functions(conn: &Connection, clock: &Arc<Mutex<Hlc>>) -> rusqlite::Result<()> {
+  conn.create_scalar_function("arca_uuid", 0, FunctionFlags::SQLITE_UTF8, |_| Ok(new_uuid()))?;
+  let clock = Arc::clone(clock);
+  conn.create_scalar_function("arca_clock", 0, FunctionFlags::SQLITE_UTF8, move |_| {
+    clock.lock()
+      .map(|mut c| c.tick())
+      .map_err(|_| rusqlite::Error::UserFunctionError("relógio indisponível".into()))
+  })
+}
+
 impl Database {
   pub fn init(db_path: impl AsRef<Path>) -> anyhow::Result<Self> {
     let conn = Connection::open(db_path)
@@ -331,9 +350,48 @@ impl Database {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
 
+    // O id do dispositivo só é conhecido depois das migrations; até lá vale um id novo, que
+    // vira o definitivo se o banco ainda não tinha um (a migration de sync carimba com ele).
+    let clock = Arc::new(Mutex::new(Hlc::new(new_uuid())));
+    register_sync_functions(&conn, &clock)?;
+
     MIGRATIONS.to_latest(&mut conn)?;
 
-    Ok(Self { conn })
+    let db = Self { conn, clock };
+    db.init_clock()?;
+    Ok(db)
+  }
+
+  fn init_clock(&self) -> anyhow::Result<()> {
+    let mut clock = self.clock.lock().map_err(|_| anyhow::anyhow!("relógio indisponível"))?;
+    match self.get_meta(META_DEVICE_ID)? {
+      Some(device) => clock.set_device(device),
+      None => self.set_meta(META_DEVICE_ID, clock.device())?,
+    }
+    // Continua de onde o banco parou, mesmo que o relógio do sistema tenha voltado.
+    let latest: Option<String> = self.conn.query_row(
+      "SELECT MAX(c) FROM (
+        SELECT MAX(sync_clock) AS c FROM projects UNION ALL SELECT MAX(sync_clock) FROM tasks
+        UNION ALL SELECT MAX(sync_clock) FROM task_history UNION ALL SELECT MAX(sync_clock) FROM suggestions
+        UNION ALL SELECT MAX(sync_clock) FROM sync_tombstones)",
+      [], |r| r.get(0),
+    )?;
+    if let Some(latest) = latest {
+      clock.observe(&latest);
+    }
+    Ok(())
+  }
+
+  /// Id deste dispositivo na sincronização.
+  pub fn device_id(&self) -> String {
+    self.clock.lock().map(|c| c.device().to_string()).unwrap_or_default()
+  }
+
+  /// Avança o relógio local para depois de um relógio remoto.
+  pub fn observe_clock(&self, clock: &str) {
+    if let Ok(mut hlc) = self.clock.lock() {
+      hlc.observe(clock);
+    }
   }
 
   pub fn conn(&self) -> &Connection {
@@ -383,9 +441,11 @@ impl Database {
     let finished = "task_status = 'DONE' AND DATE(COALESCE(done_at, updated_at)) < ?1";
 
     let archived = tx.execute(
-      &format!("INSERT INTO task_history (task_history_title, task_history_is_daily, task_history_date,
-          task_history_due_date, task_history_project_id, task_history_created_by)
-        SELECT task_title, task_is_daily, COALESCE(done_at, updated_at), due_date, project_id, created_by
+      // uuid determinístico: dois aparelhos que fazem a mesma virada geram a mesma linha.
+      &format!("INSERT OR IGNORE INTO task_history (task_history_title, task_history_is_daily, task_history_date,
+          task_history_due_date, task_history_project_id, task_history_created_by, uuid)
+        SELECT task_title, task_is_daily, COALESCE(done_at, updated_at), due_date, project_id, created_by,
+          'h:' || uuid || ':' || COALESCE(done_at, updated_at)
         FROM tasks WHERE {finished} ORDER BY COALESCE(done_at, updated_at), task_id"),
       params![cutoff],
     )?;

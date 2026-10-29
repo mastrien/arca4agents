@@ -7,3 +7,5 @@ pub mod paths;
 pub mod policy;
 pub mod agents;
 pub mod suggestions;
+pub mod clock;
+pub mod sync;

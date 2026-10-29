@@ -2,7 +2,7 @@
 
 Gerenciador de tarefas em CLI (Rust + SQLite) baseado no [Arca](https://github.com/mastrien/arca),
 com prazo de referência, projetos com pastas vinculadas e visibilidade da atividade de agentes de IA.
-Especificação completa em [`spec.md`](spec.md).
+Especificação completa em [`spec.md`](spec.md); apps e sincronização em [`spec-apps.md`](spec-apps.md).
 
 - **Estante** (`SHELF`): o que você decidiu conscientemente não priorizar agora.
 - **Carrinho** (`CART`): o que você quer manter por perto. Não significa "fazendo".
@@ -11,12 +11,16 @@ Especificação completa em [`spec.md`](spec.md).
 ## Instalação
 
 ```sh
-cargo install --path .
+cargo install --path crates/arca-cli
 ```
 
 O banco fica no diretório de dados do usuário (no Windows, `%APPDATA%\mastrien\arca\data\arca.db`).
 A variável `ARCA_DB` aponta para outro arquivo, o que é útil para testes.
 Bancos da v1 são migrados automaticamente no primeiro comando.
+
+Para inspecionar o banco, outras ferramentas (ex.: `sqlite3`, DB Browser) servem só para
+**ler**: as escritas disparam triggers de sincronização que chamam funções registradas pelo
+`arca-core` (`arca_clock`, `arca_uuid`), e essas funções não existem fora dele.
 
 ## Tarefas
 
@@ -183,6 +187,11 @@ arca reject 4
 O `list` avisa quando há sugestões pendentes, e o `board` as mostra no fim.
 
 ## Desenvolvimento
+
+```
+crates/arca-core   núcleo (banco, migrations, rollover, política, sugestões, sync); não imprime nada
+crates/arca-cli    binário `arca` (CLI, MCP, hooks)
+```
 
 ```sh
 cargo test
