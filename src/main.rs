@@ -204,7 +204,21 @@ enum Commands {
         /// Working directory (default: `cwd` from stdin, then the current one)
         #[arg(long)]
         cwd: Option<String>,
+
+        /// Link the session to the task it is working on
+        #[arg(long)]
+        task: Option<i64>,
     },
+    /// List changes proposed by agents
+    Suggestions {
+        /// Include approved and rejected ones
+        #[arg(long)]
+        all: bool,
+    },
+    /// Apply a change proposed by an agent
+    Approve { id: i64 },
+    /// Discard a change proposed by an agent
+    Reject { id: i64 },
     /// Board view: Shelf | Cart | Done today, plus agent activity
     Board {
         /// Only tasks of this project
@@ -266,6 +280,8 @@ enum ProjectCommands {
     Rename { name: String, new_name: String },
     /// Delete a project (its tasks stay, without project)
     Delete { name: String },
+    /// Show or change the "active now" window of a project, in minutes ("none" = global)
+    Window { name: String, minutes: Option<String> },
     /// Change the agent policy of a project
     Policy {
         name: String,
@@ -289,13 +305,14 @@ enum ConfigCommands {
 fn main() -> ExitCode {
     let args = Cli::parse();
 
-    if let Commands::Ping { state, agent, session, cwd } = &args.action {
+    if let Commands::Ping { state, agent, session, cwd, task } = &args.action {
         // Roda dentro de hooks: nunca pode falhar o hook nem escrever no stdout.
         let options = PingOptions {
             state: state.map(Into::into),
             agent: agent.as_deref(),
             session: session.as_deref(),
             cwd: cwd.as_deref(),
+            task: *task,
         };
         silent_ping(options);
         return ExitCode::SUCCESS;
@@ -348,6 +365,7 @@ fn run(action: Commands) -> anyhow::Result<()> {
             ProjectCommands::List => arca::project_list(&db),
             ProjectCommands::Rename {name, new_name} => arca::project_rename(&db, &name, &new_name),
             ProjectCommands::Delete {name} => arca::project_delete(&db, &name),
+            ProjectCommands::Window {name, minutes} => arca::project_window(&db, &name, minutes.as_deref()),
             ProjectCommands::Policy {name, policy} => arca::project_policy(&db, &name, policy.into()),
             ProjectCommands::Link {name, folder} => arca::project_link(&db, &name, folder.as_deref()),
             ProjectCommands::Unlink {folder} => arca::project_unlink(&db, folder.as_deref()),
@@ -360,6 +378,9 @@ fn run(action: Commands) -> anyhow::Result<()> {
             let agent = arca::agent_name(agent.as_deref()).unwrap_or_else(|| "unknown".to_string());
             arca::mcp::serve(db, agent)
         }
+        Commands::Suggestions {all} => arca::suggestions(&db, all),
+        Commands::Approve {id} => arca::approve(&db, id),
+        Commands::Reject {id} => arca::reject(&db, id),
         Commands::Agents {all, window} => arca::agents(&db, all, window),
         Commands::Config {action} => match action {
             ConfigCommands::ActiveWindow {minutes} => arca::config_active_window(&db, minutes),

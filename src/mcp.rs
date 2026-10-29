@@ -11,7 +11,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::persistence::{
-  Authors, Database, NewTask, Policy, Project, SessionState, Status, Task, TaskEdit, TaskFilter,
+  Authors, Database, NewTask, Policy, Project, SessionState, Status, SuggestionAction, Task,
+  TaskEdit, TaskFilter,
 };
 use crate::{dates, paths, policy};
 
@@ -22,6 +23,9 @@ Quando o usuário pedir para anotar algo para fazer depois, use add_task em vez 
 Chame project_for_cwd com o diretório de trabalho da sessão para descobrir o projeto e a política antes de criar tarefas.
 Políticas: NONE = agente só lê; OWN (padrão, e também para tarefas sem projeto) = agente só altera as tarefas que ele criou; \
 ALL = agente gerencia todas as tarefas do projeto. O campo can_modify de cada tarefa diz se você pode alterá-la.
+Quando a política não deixar você alterar uma tarefa (can_modify = false), use suggest_change para propor a mudança: \
+o usuário aprova ou rejeita.
+Ao começar a trabalhar numa tarefa, chame set_working_task com o id dela; isso aparece no painel do usuário.
 Prazos (due) são só referência: AAAA-MM-DD, hoje, amanhã ou +Nd.";
 
 #[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
@@ -128,6 +132,57 @@ pub struct TaskIdParams {
   pub id: i64,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum SuggestActionParam {
+  Done,
+  Move,
+  Edit,
+  Delete,
+}
+
+impl From<SuggestActionParam> for SuggestionAction {
+  fn from(value: SuggestActionParam) -> Self {
+    match value {
+      SuggestActionParam::Done => SuggestionAction::Done,
+      SuggestActionParam::Move => SuggestionAction::Move,
+      SuggestActionParam::Edit => SuggestionAction::Edit,
+      SuggestActionParam::Delete => SuggestionAction::Delete,
+    }
+  }
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SuggestChangeParams {
+  pub id: i64,
+  #[schemars(description = "DONE (concluir), MOVE (mover, exige to), EDIT (editar campos) ou DELETE (apagar)")]
+  pub action: SuggestActionParam,
+  #[schemars(description = "Para MOVE: CART ou SHELF")]
+  pub to: Option<PlaceParam>,
+  #[schemars(description = "Para EDIT: novo título")]
+  pub title: Option<String>,
+  #[schemars(description = "Para EDIT: novo prazo (AAAA-MM-DD, hoje, amanhã, +Nd) ou \"none\" para remover")]
+  pub due: Option<String>,
+  #[schemars(description = "Para EDIT: tornar diária ou não")]
+  pub daily: Option<bool>,
+  #[schemars(description = "Para EDIT: novo projeto ou \"none\" para deixar sem projeto")]
+  pub project: Option<String>,
+  #[schemars(description = "Por que você sugere isso (mostrado ao usuário)")]
+  pub reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListSuggestionsParams {
+  #[schemars(description = "Só as pendentes (padrão: false, mostra também as aprovadas e rejeitadas)")]
+  pub only_pending: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SetWorkingTaskParams {
+  #[schemars(description = "Id da tarefa em que esta sessão está trabalhando; omita para limpar")]
+  pub id: Option<i64>,
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ReportActivityParams {
   #[schemars(description = "WORKING enquanto trabalha, WAITING ao terminar e esperar o usuário, ENDED ao encerrar")]
@@ -145,10 +200,12 @@ pub struct ArcaServer {
   agent: String,
   /// `created_by` das tarefas deste agente (ex.: `agent:claude-code`).
   author: String,
-  /// Sessão usada por `report_activity`: uma por processo do servidor.
+  /// Sessão própria do servidor (uma por processo), usada quando não há sessão de hooks.
   session_id: String,
-  /// Se `report_activity` já foi chamado; nesse caso a sessão é encerrada quando o servidor sai.
+  /// Se a sessão própria chegou a ser registrada; nesse caso ela é encerrada quando o servidor sai.
   reported: Arc<AtomicBool>,
+  /// Último diretório de trabalho conhecido da sessão (o do servidor, até o agente informar outro).
+  cwd: Arc<Mutex<String>>,
   #[expect(dead_code, reason = "lido pelo código gerado por #[tool_handler]")]
   tool_router: ToolRouter<Self>,
 }
@@ -165,6 +222,7 @@ fn project_json(project: &Project) -> Value {
     "shelf": project.shelf,
     "cart": project.cart,
     "done": project.done,
+    "active_window_minutes": project.active_window,
   })
 }
 
@@ -176,16 +234,65 @@ impl ArcaServer {
       session_id: format!("mcp:{agent}:{}", std::process::id()),
       agent,
       reported: Arc::new(AtomicBool::new(false)),
+      cwd: Arc::new(Mutex::new(
+        std::env::current_dir().ok()
+          .and_then(|d| paths::normalize(&d.to_string_lossy()).ok())
+          .unwrap_or_default(),
+      )),
       tool_router: Self::tool_router(),
     }
   }
 
   /// Abre o banco para uma ferramenta, fazendo antes a virada do dia se for preciso
-  /// (o servidor pode ficar aberto de um dia para o outro).
+  /// (o servidor pode ficar aberto de um dia para o outro). Toda chamada conta como
+  /// sinal de vida da sessão, o que cobre agentes sem hooks.
   fn with_db<T>(&self, f: impl FnOnce(&Database) -> anyhow::Result<T>) -> Result<T, String> {
     let db = self.db.lock().map_err(|_| "banco indisponível (lock envenenado)".to_string())?;
     db.rollover_if_needed(dates::today()).map_err(|e| format!("{e:#}"))?;
+    if let Ok(session) = self.activity_session(&db) {
+      let _ = db.touch_session(&session);
+    }
     f(&db).map_err(|e| format!("{e:#}"))
+  }
+
+  fn current_cwd(&self) -> String {
+    self.cwd.lock().map(|c| c.clone()).unwrap_or_default()
+  }
+
+  /// Guarda o diretório informado pelo agente, que é mais confiável que o do servidor.
+  fn remember_cwd(&self, cwd: &str) {
+    if let (Ok(normalized), Ok(mut current)) = (paths::normalize(cwd), self.cwd.lock()) {
+      *current = normalized;
+    }
+  }
+
+  /// Sessão à qual a atividade deste servidor pertence: a sessão aberta dos hooks do mesmo
+  /// agente na mesma pasta (ou, senão, no mesmo projeto); sem ela, a sessão própria do servidor.
+  fn activity_session(&self, db: &Database) -> anyhow::Result<String> {
+    let cwd = self.current_cwd();
+    if let Some(id) = db.find_open_session(&self.agent, &cwd)? {
+      return Ok(id);
+    }
+
+    let project_id = db.project_for_path(&cwd)?;
+    if let Some(project_id) = project_id {
+      let project = db.get_project(project_id)?.name;
+      let same_project = db.get_sessions()?.into_iter().find(|s| {
+        s.agent == self.agent
+          && s.state != SessionState::Ended
+          && !s.session_id.starts_with("mcp:")
+          && s.project_name.as_deref() == Some(project.as_str())
+      });
+      if let Some(session) = same_project {
+        return Ok(session.session_id);
+      }
+    }
+
+    if !self.reported.load(Ordering::Relaxed) {
+      db.upsert_session(&self.session_id, &self.agent, project_id, &cwd, SessionState::Working)?;
+      self.reported.store(true, Ordering::Relaxed);
+    }
+    Ok(self.session_id.clone())
   }
 
   fn task_json(&self, task: &Task, today: chrono::NaiveDate) -> Value {
@@ -206,8 +313,14 @@ impl ArcaServer {
   /// Carrega a tarefa e confere se este agente pode alterá-la.
   fn modifiable_task(&self, db: &Database, id: i64) -> anyhow::Result<Task> {
     let task = db.get_task(id)?;
-    policy::can_modify(policy::effective(task.project_policy), &self.author, &task)
-      .map_err(anyhow::Error::msg)?;
+    let policy = policy::effective(task.project_policy);
+    policy::can_modify(policy, &self.author, &task).map_err(|reason| {
+      if policy == Policy::Own {
+        anyhow::anyhow!("{reason}. Use suggest_change para propor a mudança ao usuário.")
+      } else {
+        anyhow::Error::msg(reason)
+      }
+    })?;
     Ok(task)
   }
 
@@ -224,6 +337,7 @@ impl ArcaServer {
 impl ArcaServer {
   #[tool(description = "Descobre o projeto de um diretório (pasta vinculada mais específica), a política de agentes e o resumo de tarefas.")]
   fn project_for_cwd(&self, Parameters(p): Parameters<ProjectForCwdParams>) -> ToolResult {
+    self.remember_cwd(&p.cwd);
     let value = self.with_db(|db| {
       let cwd = paths::normalize(&p.cwd)?;
       Ok(match db.project_for_path(&cwd)? {
@@ -336,18 +450,101 @@ impl ArcaServer {
   #[tool(description = "Registra o estado da sessão deste agente no painel de atividade. Só é necessário para agentes sem hooks.")]
   fn report_activity(&self, Parameters(p): Parameters<ReportActivityParams>) -> ToolResult {
     let state: SessionState = p.state.into();
+    if let Some(cwd) = p.cwd.as_deref() {
+      self.remember_cwd(cwd);
+    }
     let value = self.with_db(|db| {
-      let cwd = match p.cwd.as_deref() {
-        Some(cwd) => paths::normalize(cwd)?,
-        None => paths::normalize(&std::env::current_dir()?.to_string_lossy())?,
-      };
+      let session = self.activity_session(db)?;
+      let cwd = self.current_cwd();
       let project_id = db.project_for_path(&cwd)?;
-      db.upsert_session(&self.session_id, &self.agent, project_id, &cwd, state)?;
-      self.reported.store(true, Ordering::Relaxed);
+      db.upsert_session(&session, &self.agent, project_id, &cwd, state)?;
       let project = project_id.map(|id| db.get_project(id)).transpose()?.map(|p| p.name);
-      Ok(json!({ "session_id": self.session_id, "state": state.as_str(), "project": project, "cwd": cwd }))
+      Ok(json!({ "session_id": session, "state": state.as_str(), "project": project, "cwd": cwd }))
     })?;
     to_text(value)
+  }
+
+  #[tool(description = "Indica em qual tarefa esta sessão está trabalhando (aparece no painel do usuário). Omita id para limpar.")]
+  fn set_working_task(&self, Parameters(p): Parameters<SetWorkingTaskParams>) -> ToolResult {
+    let today = dates::today();
+    let value = self.with_db(|db| {
+      let task = p.id.map(|id| db.get_task(id)).transpose()?;
+      let session = self.activity_session(db)?;
+      db.set_session_task(&session, p.id)?;
+      Ok(json!({ "session_id": session, "task": task.map(|t| self.task_json(&t, today)) }))
+    })?;
+    to_text(value)
+  }
+
+  #[tool(description = "Propõe ao usuário uma mudança numa tarefa que você não pode alterar (concluir, mover, editar, apagar). Ele aprova ou rejeita.")]
+  fn suggest_change(&self, Parameters(p): Parameters<SuggestChangeParams>) -> ToolResult {
+    let today = dates::today();
+    let value = self.with_db(|db| {
+      let task = db.get_task(p.id)?;
+      if policy::effective(task.project_policy) == Policy::None {
+        anyhow::bail!("Tarefa #{}: política NONE, agentes só leem (nem sugestões)", task.id);
+      }
+
+      let action: SuggestionAction = p.action.into();
+      let payload = match action {
+        SuggestionAction::Done | SuggestionAction::Delete => json!({}),
+        SuggestionAction::Move => match p.to {
+          Some(to) => json!({ "to": Status::from(to).as_str() }),
+          None => anyhow::bail!("MOVE precisa de to (CART ou SHELF)"),
+        },
+        SuggestionAction::Edit => {
+          let mut changes = serde_json::Map::new();
+          if let Some(title) = &p.title {
+            changes.insert("title".into(), json!(title));
+          }
+          if let Some(due) = p.due.as_deref() {
+            // Prazos relativos (+3d) são fixados agora, para não mudarem até a aprovação.
+            let value = if due.eq_ignore_ascii_case("none") { Value::Null } else { json!(dates::parse_due(due, today)?.to_string()) };
+            changes.insert("due".into(), value);
+          }
+          if let Some(daily) = p.daily {
+            changes.insert("daily".into(), json!(daily));
+          }
+          if let Some(project) = p.project.as_deref() {
+            let value = if project.eq_ignore_ascii_case("none") { Value::Null } else { json!(db.get_project(db.project_id(project)?)?.name) };
+            changes.insert("project".into(), value);
+          }
+          if changes.is_empty() {
+            anyhow::bail!("EDIT precisa de pelo menos um campo (title, due, daily ou project)");
+          }
+          Value::Object(changes)
+        }
+      };
+
+      let id = db.add_suggestion(task.id, &self.author, action, &payload, p.reason.as_deref())?;
+      let suggestion = db.get_suggestion(id)?;
+      Ok(json!({
+        "suggestion_id": id,
+        "task_id": task.id,
+        "summary": crate::render::describe_suggestion(&suggestion),
+        "state": suggestion.state.as_str(),
+        "note": "Aguardando o usuário aprovar ou rejeitar (arca suggestions).",
+      }))
+    })?;
+    to_text(value)
+  }
+
+  #[tool(description = "Lista as sugestões feitas por este agente e se o usuário já aprovou ou rejeitou.")]
+  fn list_suggestions(&self, Parameters(p): Parameters<ListSuggestionsParams>) -> ToolResult {
+    let suggestions = self.with_db(|db| db.get_suggestions(p.only_pending.unwrap_or(false)))?;
+    let mine: Vec<Value> = suggestions.iter()
+      .filter(|s| s.created_by == self.author)
+      .map(|s| json!({
+        "suggestion_id": s.id,
+        "task_id": s.task_id,
+        "task_title": s.task_title,
+        "summary": crate::render::describe_suggestion(s),
+        "reason": s.reason,
+        "state": s.state.as_str(),
+        "created_at": s.created_at,
+      }))
+      .collect();
+    to_text(Value::Array(mine))
   }
 }
 
@@ -392,7 +589,7 @@ impl ArcaServer {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::persistence::USER;
+  use crate::persistence::{SuggestionState, USER};
 
   fn server_with(setup: impl FnOnce(&Database)) -> ArcaServer {
     let db = Database::open_in_memory().unwrap();
@@ -426,6 +623,59 @@ mod tests {
     let id = added["id"].as_i64().unwrap();
     assert!(server.move_task(Parameters(MoveTaskParams { id, to: PlaceParam::Cart })).is_ok());
     assert!(server.done_task(Parameters(TaskIdParams { id })).is_ok());
+  }
+
+  #[test]
+  fn suggestions_go_to_the_user() {
+    let server = server_with(|db| {
+      let p = db.add_project("arca", Policy::Own).unwrap();
+      user_task(db, "do usuário", Some(p));
+    });
+
+    let err = server.done_task(Parameters(TaskIdParams { id: 1 })).unwrap_err();
+    assert!(err.contains("suggest_change"), "{err}");
+
+    let created: Value = serde_json::from_str(&server.suggest_change(Parameters(SuggestChangeParams {
+      id: 1, action: SuggestActionParam::Edit, to: None, title: None, due: Some("+3d".into()),
+      daily: None, project: Some("none".into()), reason: Some("prazo da banca".into()),
+    })).unwrap()).unwrap();
+    assert_eq!(created["state"], SuggestionState::Pending.as_str());
+    assert!(created["summary"].as_str().unwrap().contains("sem projeto"));
+
+    assert!(server.suggest_change(Parameters(SuggestChangeParams {
+      id: 1, action: SuggestActionParam::Move, to: None, title: None, due: None, daily: None, project: None, reason: None,
+    })).is_err());
+
+    let mine: Value = serde_json::from_str(&server.list_suggestions(Parameters(ListSuggestionsParams { only_pending: None })).unwrap()).unwrap();
+    assert_eq!(mine.as_array().unwrap().len(), 1);
+  }
+
+  #[test]
+  fn calls_are_activity_and_link_tasks() {
+    let server = server_with(|db| {
+      user_task(db, "tarefa", None);
+    });
+    *server.cwd.lock().unwrap() = "c:/projeto".to_string();
+
+    // Sem sessão de hooks, o servidor registra a própria sessão na primeira chamada.
+    server.list_projects().unwrap();
+    server.set_working_task(Parameters(SetWorkingTaskParams { id: Some(1) })).unwrap();
+    {
+      let db = server.db.lock().unwrap();
+      let sessions = db.get_sessions().unwrap();
+      assert_eq!(sessions.len(), 1);
+      assert!(sessions[0].session_id.starts_with("mcp:claude-code:"));
+      assert_eq!(sessions[0].state, SessionState::Working);
+      assert_eq!(sessions[0].task_title.as_deref(), Some("tarefa"));
+    }
+
+    // Com uma sessão de hooks na mesma pasta, a atividade vai para ela.
+    server.db.lock().unwrap().upsert_session("hook-1", "claude-code", None, "c:/projeto", SessionState::Waiting).unwrap();
+    server.set_working_task(Parameters(SetWorkingTaskParams { id: Some(1) })).unwrap();
+    let db = server.db.lock().unwrap();
+    let hook = db.get_sessions().unwrap().into_iter().find(|s| s.session_id == "hook-1").unwrap();
+    assert_eq!(hook.state, SessionState::Working);
+    assert_eq!(hook.task_id, Some(1));
   }
 
   #[test]

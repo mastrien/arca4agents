@@ -84,8 +84,11 @@ stdout dos hooks `SessionStart` e `UserPromptSubmit` entra no contexto do agente
 arca agents                       # sessões por projeto
 arca agents --window 30 --all
 arca config active-window 15      # minutos até "trabalhando" virar "possivelmente parada" (padrão 10)
-arca ping --state working --agent antigravity   # registro manual, para agentes sem hooks
+arca project window mestrado 30   # janela própria do projeto ("none" volta para a global)
+arca ping --state working --agent antigravity --task 12   # registro manual, ligado à tarefa #12
 ```
+
+Quando a sessão está ligada a uma tarefa, o painel mostra "em #12 Título".
 
 O nome do agente vem de `--agent` ou da variável `ARCA_AGENT`. Ele é declarado pelo próprio
 agente: serve para uso local e **não é** um mecanismo de segurança.
@@ -133,7 +136,8 @@ arca board --width 50             # abaixo de 72 colunas (ex.: Termux) as coluna
 ## Servidor MCP
 
 `arca mcp` é um servidor MCP (stdio) com as ferramentas `project_for_cwd`, `list_projects`,
-`list_tasks`, `add_task`, `edit_task`, `move_task`, `done_task`, `delete_task` e `report_activity`.
+`list_tasks`, `add_task`, `edit_task`, `move_task`, `done_task`, `delete_task`, `suggest_change`,
+`list_suggestions`, `set_working_task` e `report_activity`.
 Todas operam por **id** e passam pela política do projeto, aplicada no servidor:
 
 | Política | O agente pode |
@@ -152,8 +156,23 @@ Registro no Claude Code:
 claude mcp add --scope user arca -- arca mcp --agent claude-code
 ```
 
-Para agentes sem hooks, a ferramenta `report_activity` registra o estado da sessão no painel. A
-sessão é marcada como encerrada quando o servidor fecha.
+Toda chamada de ferramenta conta como sinal de vida. Ela vai para a sessão dos hooks do mesmo
+agente na mesma pasta (ou no mesmo projeto). Se o agente não tem hooks, o servidor registra uma
+sessão própria, encerrada quando ele fecha. `report_activity` informa um estado explícito, e
+`set_working_task` liga a sessão à tarefa em andamento.
+
+### Sugestões
+
+Quando a política não deixa o agente mexer numa tarefa, ele pode propor a mudança com
+`suggest_change` (concluir, mover, editar ou apagar, com um motivo). Só você aplica:
+
+```sh
+arca suggestions          # pendentes (--all inclui as resolvidas)
+arca approve 3
+arca reject 4
+```
+
+O `list` avisa quando há sugestões pendentes, e o `board` as mostra no fim.
 
 ## Desenvolvimento
 

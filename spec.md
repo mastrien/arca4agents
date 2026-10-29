@@ -149,14 +149,14 @@ Observações de implementação:
 - `list` mostra prazo humanizado e marca tarefas de agentes quando `--agents` está ativo.
 - Fica para o futuro, fora do MVP: interface gráfica/web, notificações, múltiplos usuários.
 
-## 8. Decisões em aberto
+## 8. Decisões (fechadas em 2026-10-29)
 
-1. `arca check` fica como alias do rollover ou é removido?
-2. Tarefas não diárias concluídas: apagar na virada (como hoje) ou manter visíveis por N dias?
-3. Janela padrão de "ativo agora" (proposta: 10 min) e se deve ser configurável por projeto.
-4. Agentes sem hooks (Antigravity etc.): suporte além de `report_activity` via MCP?
-5. Um agente pode **sugerir** concluir/mover uma tarefa do usuário (proposta pendente que o usuário aprova) em vez de ser bloqueado?
-6. Quando uma sessão de agente está trabalhando numa tarefa específica, vale registrar essa ligação (tarefa ↔ sessão)?
+1. **`arca check` fica como comando legado.** Ele arquiva na hora tudo o que está concluído, inclusive o que foi concluído hoje (comportamento original). A virada automática só arquiva o que é de dias anteriores.
+2. **Não diárias concluídas são apagadas na virada**, como antes, depois de registradas no histórico.
+3. **A janela de "ativo agora" é de 10 min por padrão**, configurável na global (`arca config active-window`) e por projeto (`arca project window <nome> <min|none>`). A flag `--window` sobrepõe as duas.
+4. **Para agentes sem hooks, toda chamada de ferramenta MCP conta como sinal de vida.** O servidor procura a sessão aberta dos hooks do mesmo agente na mesma pasta (ou, se não houver, no mesmo projeto). Sem ela, registra uma sessão própria (`mcp:<agente>:<pid>`), que é encerrada quando o servidor fecha. `report_activity` continua disponível para estados explícitos.
+5. **Sim, o agente pode sugerir.** `suggest_change` cria uma proposta (concluir, mover, editar ou apagar) com motivo. Só o usuário aplica, com `arca suggestions` / `approve` / `reject`. Prazos relativos são fixados no momento da sugestão. Na política `NONE`, nem sugestões são aceitas.
+6. **Sim, a ligação tarefa ↔ sessão é registrada.** A ferramenta MCP `set_working_task` ou `arca ping --task` preenchem `agent_sessions.task_id`. O painel mostra "em #12 Título". Os hooks preservam a ligação.
 
 ## 9. Plano em fases (MVP primeiro)
 

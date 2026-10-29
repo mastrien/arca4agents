@@ -12,10 +12,10 @@ use colored::Colorize;
 use std::io::{IsTerminal, Read};
 
 use crate::persistence::{
-  Authors, Database, NewTask, Policy, Session, SessionState, Status, Task, TaskEdit, TaskFilter,
-  AGENT_PREFIX, META_ACTIVE_WINDOW, USER,
+  Authors, Database, NewTask, Policy, Session, SessionState, Status, Suggestion, SuggestionAction,
+  SuggestionState, Task, TaskEdit, TaskFilter, AGENT_PREFIX, META_ACTIVE_WINDOW, USER,
 };
-use crate::render::ListStyle;
+use crate::render::{ActiveWindow, ListStyle};
 
 pub const DEFAULT_ACTIVE_WINDOW_MINUTES: i64 = 10;
 
@@ -99,6 +99,17 @@ pub fn list(db: &Database, options: ListOptions) -> Result<()> {
     (true, false) => render::render_cart(&cart, &style),
     (false, true) => render::render_shelf(&shelf, &style),
     _ => render::render_all(&cart, &shelf, &style),
+  }
+  print_pending_hint(db)?;
+  Ok(())
+}
+
+/// Lembrete discreto quando há sugestões de agentes esperando o usuário.
+fn print_pending_hint(db: &Database) -> Result<()> {
+  let pending = db.count_pending_suggestions()?;
+  if pending > 0 {
+    let text = if pending == 1 { "1 sugestão de agente pendente".to_string() } else { format!("{pending} sugestões de agentes pendentes") };
+    println!("\n{}", format!("{text}: arca suggestions").yellow());
   }
   Ok(())
 }
@@ -221,6 +232,32 @@ pub fn project_delete(db: &Database, name: &str) -> Result<()> {
   Ok(())
 }
 
+/// Mostra ou muda a janela de "ativo agora" do projeto (`none` volta a usar a global).
+pub fn project_window(db: &Database, name: &str, minutes: Option<&str>) -> Result<()> {
+  let id = db.project_id(name)?;
+  match clearable(minutes, parse_minutes)? {
+    None => match db.get_project(id)?.active_window {
+      Some(m) => println!("{name}: janela {m} min"),
+      None => println!("{name}: usa a janela global ({} min)", active_window(db, None)?),
+    },
+    Some(value) => {
+      db.set_project_window(id, value)?;
+      match value {
+        Some(m) => println!("{name}: janela {m} min"),
+        None => println!("{name}: voltou a usar a janela global"),
+      }
+    }
+  }
+  Ok(())
+}
+
+fn parse_minutes(value: &str) -> Result<i64> {
+  match value.parse::<i64>() {
+    Ok(m) if m > 0 => Ok(m),
+    _ => bail!("Janela inválida: '{value}'. Use um número de minutos maior que zero ou none"),
+  }
+}
+
 pub fn project_policy(db: &Database, name: &str, policy: Policy) -> Result<()> {
   let id = db.project_id(name)?;
   db.set_project_policy(id, policy)?;
@@ -293,6 +330,8 @@ pub struct PingOptions<'a> {
   pub agent: Option<&'a str>,
   pub session: Option<&'a str>,
   pub cwd: Option<&'a str>,
+  /// Liga a sessão a uma tarefa (para agentes que registram atividade por script).
+  pub task: Option<i64>,
 }
 
 /// Registra um sinal de vida de uma sessão de agente. Pensado para hooks:
@@ -324,6 +363,10 @@ pub fn ping(db: &Database, options: PingOptions) -> Result<()> {
 
   let project_id = db.project_for_path(&cwd)?;
   db.upsert_session(&session_id, &agent, project_id, &cwd, state)?;
+  if let Some(task) = options.task {
+    db.get_task(task)?;
+    db.set_session_task(&session_id, Some(task))?;
+  }
   db.prune_sessions(30)?;
   Ok(())
 }
@@ -362,7 +405,7 @@ fn recent_sessions(db: &Database, all: bool, now: NaiveDateTime) -> Result<Vec<S
 
 /// Painel de atividade dos agentes por projeto.
 pub fn agents(db: &Database, all: bool, window: Option<i64>) -> Result<()> {
-  let window = active_window(db, window)?;
+  let window = ActiveWindow { forced: window, default: active_window(db, None)? };
   let now = dates::now();
   render::render_sessions(&recent_sessions(db, all, now)?, now, window);
   Ok(())
@@ -409,7 +452,7 @@ pub fn board(db: &Database, options: BoardOptions) -> Result<()> {
   };
   render::render_board(&shelf, &cart, &done, &style, terminal_width(options.width));
 
-  let window = active_window(db, options.window)?;
+  let window = ActiveWindow { forced: options.window, default: active_window(db, None)? };
   let now = dates::now();
   let sessions: Vec<_> = recent_sessions(db, false, now)?.into_iter()
     .filter(|s| project.as_ref().is_none_or(|p| s.project_name.as_deref() == Some(p.name.as_str())))
@@ -418,6 +461,80 @@ pub fn board(db: &Database, options: BoardOptions) -> Result<()> {
     println!("\n{}", "Agentes".bold());
     render::render_sessions(&sessions, now, window);
   }
+
+  let pending = db.get_suggestions(true)?;
+  if !pending.is_empty() {
+    println!("\n{}", format!("Sugestões pendentes ({})", pending.len()).bold());
+    render::render_suggestions(&pending, now);
+    println!("{}", "arca approve <n> / arca reject <n>".dimmed());
+  }
+  Ok(())
+}
+
+// ---------- Sugestões ----------
+
+pub fn suggestions(db: &Database, all: bool) -> Result<()> {
+  render::render_suggestions(&db.get_suggestions(!all)?, dates::now());
+  Ok(())
+}
+
+fn pending_suggestion(db: &Database, id: i64) -> Result<Suggestion> {
+  let suggestion = db.get_suggestion(id)?;
+  if suggestion.state != SuggestionState::Pending {
+    bail!("A sugestão [{id}] já foi resolvida");
+  }
+  Ok(suggestion)
+}
+
+/// Aplica a mudança proposta, com as permissões do usuário.
+fn apply_suggestion(db: &Database, suggestion: &Suggestion) -> Result<()> {
+  let payload = &suggestion.payload;
+  let id = suggestion.task_id;
+  match suggestion.action {
+    SuggestionAction::Done => db.change_task_status(id, Status::Done),
+    SuggestionAction::Delete => db.delete_task(id),
+    SuggestionAction::Move => {
+      let to = match payload.get("to").and_then(|v| v.as_str()) {
+        Some("CART") => Status::Cart,
+        Some("SHELF") => Status::Shelf,
+        other => bail!("Destino inválido na sugestão: {other:?}"),
+      };
+      db.change_task_status(id, to)
+    }
+    SuggestionAction::Edit => {
+      let due_date = match payload.get("due") {
+        None => None,
+        Some(serde_json::Value::Null) => Some(None),
+        Some(v) => Some(Some(dates::parse_due(v.as_str().unwrap_or_default(), dates::today())?)),
+      };
+      let project_id = match payload.get("project") {
+        None => None,
+        Some(serde_json::Value::Null) => Some(None),
+        Some(v) => Some(Some(db.project_id(v.as_str().unwrap_or_default())?)),
+      };
+      db.edit_task(id, TaskEdit {
+        title: payload.get("title").and_then(|v| v.as_str()),
+        daily: payload.get("daily").and_then(|v| v.as_bool()),
+        due_date,
+        project_id,
+      })
+    }
+  }
+}
+
+pub fn approve(db: &Database, id: i64) -> Result<()> {
+  let suggestion = pending_suggestion(db, id)?;
+  apply_suggestion(db, &suggestion)?;
+  // Se a sugestão era apagar, a linha dela já saiu junto com a tarefa.
+  db.resolve_suggestion(id, SuggestionState::Approved)?;
+  println!("{} {} #{} {}", "Aprovada:".green(), render::describe_suggestion(&suggestion), suggestion.task_id, suggestion.task_title);
+  Ok(())
+}
+
+pub fn reject(db: &Database, id: i64) -> Result<()> {
+  let suggestion = pending_suggestion(db, id)?;
+  db.resolve_suggestion(id, SuggestionState::Rejected)?;
+  println!("{} {} #{} {}", "Rejeitada:".red(), render::describe_suggestion(&suggestion), suggestion.task_id, suggestion.task_title);
   Ok(())
 }
 
@@ -436,6 +553,30 @@ pub fn config_active_window(db: &Database, minutes: Option<i64>) -> Result<()> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn approving_applies_the_suggested_change() {
+    let db = Database::open_in_memory().unwrap();
+    let project = db.add_project("arca", Policy::Own).unwrap();
+    let id = db.add_task(NewTask { title: "x", daily: false, status: Status::Cart, due_date: None, project_id: Some(project), created_by: USER }).unwrap();
+
+    let edit = db.add_suggestion(id, "agent:claude-code", SuggestionAction::Edit,
+      &serde_json::json!({"title": "novo", "due": "2026-11-05", "project": null}), None).unwrap();
+    approve(&db, edit).unwrap();
+    let task = db.get_task(id).unwrap();
+    assert_eq!(task.title, "novo");
+    assert_eq!(task.due_date.map(|d| d.to_string()).as_deref(), Some("2026-11-05"));
+    assert_eq!(task.project_id, None);
+    assert!(approve(&db, edit).is_err(), "não aprova duas vezes");
+
+    let move_ = db.add_suggestion(id, "agent:claude-code", SuggestionAction::Move, &serde_json::json!({"to": "SHELF"}), None).unwrap();
+    reject(&db, move_).unwrap();
+    assert_eq!(db.get_task(id).unwrap().status, Status::Cart);
+
+    let delete = db.add_suggestion(id, "agent:claude-code", SuggestionAction::Delete, &serde_json::json!({}), None).unwrap();
+    approve(&db, delete).unwrap();
+    assert!(db.get_task(id).is_err());
+  }
 
   #[test]
   fn maps_hook_events() {

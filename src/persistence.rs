@@ -154,6 +154,8 @@ pub struct Project {
   pub shelf: u32,
   pub cart: u32,
   pub done: u32,
+  /// Janela de "ativo agora" do projeto; `None` usa a global.
+  pub active_window: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -165,6 +167,82 @@ pub struct Session {
   pub state: SessionState,
   pub started_at: String,
   pub last_seen_at: String,
+  /// Tarefa em que a sessão está trabalhando.
+  pub task_id: Option<i64>,
+  pub task_title: Option<String>,
+  /// Janela de "ativo agora" do projeto da sessão, se houver.
+  pub project_window: Option<i64>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SuggestionAction {
+  Done,
+  Move,
+  Edit,
+  Delete,
+}
+
+impl SuggestionAction {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      SuggestionAction::Done => "DONE",
+      SuggestionAction::Move => "MOVE",
+      SuggestionAction::Edit => "EDIT",
+      SuggestionAction::Delete => "DELETE",
+    }
+  }
+
+  fn parse(s: &str) -> rusqlite::Result<Self> {
+    match s {
+      "DONE" => Ok(SuggestionAction::Done),
+      "MOVE" => Ok(SuggestionAction::Move),
+      "EDIT" => Ok(SuggestionAction::Edit),
+      "DELETE" => Ok(SuggestionAction::Delete),
+      other => Err(invalid_text(other)),
+    }
+  }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SuggestionState {
+  Pending,
+  Approved,
+  Rejected,
+}
+
+impl SuggestionState {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      SuggestionState::Pending => "PENDING",
+      SuggestionState::Approved => "APPROVED",
+      SuggestionState::Rejected => "REJECTED",
+    }
+  }
+
+  fn parse(s: &str) -> rusqlite::Result<Self> {
+    match s {
+      "PENDING" => Ok(SuggestionState::Pending),
+      "APPROVED" => Ok(SuggestionState::Approved),
+      "REJECTED" => Ok(SuggestionState::Rejected),
+      other => Err(invalid_text(other)),
+    }
+  }
+}
+
+/// Mudança proposta por um agente numa tarefa que ele não pode alterar.
+/// `payload` é JSON: `{"to": "CART"}` para MOVE; para EDIT, chaves ausentes não mudam
+/// e `null` limpa (`{"due": null}`).
+#[derive(Clone, Debug)]
+pub struct Suggestion {
+  pub id: i64,
+  pub task_id: i64,
+  pub task_title: String,
+  pub created_by: String,
+  pub action: SuggestionAction,
+  pub payload: serde_json::Value,
+  pub reason: Option<String>,
+  pub state: SuggestionState,
+  pub created_at: String,
 }
 
 /// Quais autores aparecem numa listagem.
@@ -462,7 +540,8 @@ impl Database {
           (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.project_id AND t.task_status = 'SHELF'),
           (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.project_id AND t.task_status = 'CART'),
           (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.project_id AND t.task_status = 'DONE')
-            + (SELECT COUNT(*) FROM task_history h WHERE h.task_history_project_id = p.project_id)
+            + (SELECT COUNT(*) FROM task_history h WHERE h.task_history_project_id = p.project_id),
+          p.active_window_minutes
         FROM projects p ORDER BY p.project_name COLLATE NOCASE"
     )?;
     let mut projects = stmt.query_map([], |row| {
@@ -474,6 +553,7 @@ impl Database {
         shelf: row.get(3)?,
         cart: row.get(4)?,
         done: row.get(5)?,
+        active_window: row.get(6)?,
       })
     })?.collect::<rusqlite::Result<Vec<_>>>()?;
 
@@ -503,6 +583,11 @@ impl Database {
 
   pub fn set_project_policy(&self, id: i64, policy: Policy) -> anyhow::Result<()> {
     self.conn.execute("UPDATE projects SET agent_policy = ?1 WHERE project_id = ?2", params![policy.as_str(), id])?;
+    Ok(())
+  }
+
+  pub fn set_project_window(&self, id: i64, minutes: Option<i64>) -> anyhow::Result<()> {
+    self.conn.execute("UPDATE projects SET active_window_minutes = ?1 WHERE project_id = ?2", params![minutes, id])?;
     Ok(())
   }
 
@@ -612,8 +697,11 @@ impl Database {
   /// Sessões da mais recente para a mais antiga.
   pub fn get_sessions(&self) -> anyhow::Result<Vec<Session>> {
     let mut stmt = self.conn.prepare(
-      "SELECT s.session_id, s.agent, p.project_name, s.cwd, s.state, s.started_at, s.last_seen_at
-        FROM agent_sessions s LEFT JOIN projects p ON p.project_id = s.project_id
+      "SELECT s.session_id, s.agent, p.project_name, s.cwd, s.state, s.started_at, s.last_seen_at,
+          s.task_id, t.task_title, p.active_window_minutes
+        FROM agent_sessions s
+          LEFT JOIN projects p ON p.project_id = s.project_id
+          LEFT JOIN tasks t ON t.task_id = s.task_id
         ORDER BY s.last_seen_at DESC"
     )?;
     let sessions = stmt.query_map([], |row| {
@@ -625,9 +713,103 @@ impl Database {
         state: SessionState::parse(&row.get::<_, String>(4)?)?,
         started_at: row.get(5)?,
         last_seen_at: row.get(6)?,
+        task_id: row.get(7)?,
+        task_title: row.get(8)?,
+        project_window: row.get(9)?,
       })
     })?.collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(sessions)
+  }
+
+  /// Sessão aberta (não encerrada) mais recente de um agente numa pasta, ignorando as
+  /// sessões próprias dos servidores MCP. Usada para o MCP achar a sessão registrada pelos hooks.
+  pub fn find_open_session(&self, agent: &str, cwd: &str) -> anyhow::Result<Option<String>> {
+    Ok(self.conn.query_row(
+      "SELECT session_id FROM agent_sessions
+        WHERE agent = ?1 AND cwd = ?2 AND state <> 'ENDED' AND session_id NOT LIKE 'mcp:%'
+        ORDER BY last_seen_at DESC LIMIT 1",
+      params![agent, cwd], |r| r.get(0),
+    ).optional()?)
+  }
+
+  /// Sinal de vida implícito (ex.: uma chamada MCP): marca a sessão como trabalhando agora.
+  pub fn touch_session(&self, session_id: &str) -> anyhow::Result<()> {
+    self.conn.execute(
+      "UPDATE agent_sessions SET state = 'WORKING', last_seen_at = DATETIME('now', 'localtime') WHERE session_id = ?1",
+      params![session_id],
+    )?;
+    Ok(())
+  }
+
+  /// Liga (ou desliga, com `None`) a sessão à tarefa em que ela está trabalhando.
+  pub fn set_session_task(&self, session_id: &str, task_id: Option<i64>) -> anyhow::Result<()> {
+    let rows = self.conn.execute(
+      "UPDATE agent_sessions SET task_id = ?1 WHERE session_id = ?2",
+      params![task_id, session_id],
+    )?;
+    if rows == 0 {
+      bail!("Sessão '{session_id}' não encontrada");
+    }
+    Ok(())
+  }
+
+  // ---------- Sugestões ----------
+
+  pub fn add_suggestion(
+    &self,
+    task_id: i64,
+    created_by: &str,
+    action: SuggestionAction,
+    payload: &serde_json::Value,
+    reason: Option<&str>,
+  ) -> anyhow::Result<i64> {
+    self.conn.execute(
+      "INSERT INTO suggestions (task_id, created_by, action, payload, reason) VALUES (?1, ?2, ?3, ?4, ?5)",
+      params![task_id, created_by, action.as_str(), payload.to_string(), reason],
+    ).context("Fail to insert suggestion")?;
+    Ok(self.conn.last_insert_rowid())
+  }
+
+  /// Sugestões, das mais antigas para as mais novas; `only_pending` esconde as já resolvidas.
+  pub fn get_suggestions(&self, only_pending: bool) -> anyhow::Result<Vec<Suggestion>> {
+    let mut stmt = self.conn.prepare(
+      "SELECT s.suggestion_id, s.task_id, t.task_title, s.created_by, s.action, s.payload, s.reason,
+          s.state, s.created_at
+        FROM suggestions s JOIN tasks t ON t.task_id = s.task_id
+        WHERE (?1 = 0 OR s.state = 'PENDING')
+        ORDER BY s.suggestion_id ASC"
+    )?;
+    let suggestions = stmt.query_map(params![only_pending], |row| {
+      Ok(Suggestion {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        task_title: row.get(2)?,
+        created_by: row.get(3)?,
+        action: SuggestionAction::parse(&row.get::<_, String>(4)?)?,
+        payload: serde_json::from_str(&row.get::<_, String>(5)?).unwrap_or(serde_json::Value::Null),
+        reason: row.get(6)?,
+        state: SuggestionState::parse(&row.get::<_, String>(7)?)?,
+        created_at: row.get(8)?,
+      })
+    })?.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(suggestions)
+  }
+
+  pub fn get_suggestion(&self, id: i64) -> anyhow::Result<Suggestion> {
+    self.get_suggestions(false)?.into_iter().find(|s| s.id == id)
+      .with_context(|| format!("Sugestão #{id} não encontrada (veja `arca suggestions`)"))
+  }
+
+  pub fn resolve_suggestion(&self, id: i64, state: SuggestionState) -> anyhow::Result<()> {
+    self.conn.execute(
+      "UPDATE suggestions SET state = ?1, resolved_at = DATETIME('now', 'localtime') WHERE suggestion_id = ?2",
+      params![state.as_str(), id],
+    )?;
+    Ok(())
+  }
+
+  pub fn count_pending_suggestions(&self) -> anyhow::Result<u32> {
+    Ok(self.conn.query_row("SELECT COUNT(*) FROM suggestions WHERE state = 'PENDING'", [], |r| r.get(0))?)
   }
 }
 
@@ -761,6 +943,44 @@ mod tests {
     assert_eq!(titles(Authors::User), vec!["do usuário"]);
     assert_eq!(titles(Authors::Agents), vec!["do agente"]);
     assert_eq!(titles(Authors::All), vec!["do usuário", "do agente"]);
+  }
+
+  #[test]
+  fn hooks_keep_the_session_task_link() {
+    let db = Database::open_in_memory().unwrap();
+    let id = add(&db, "Tarefa", false);
+    db.upsert_session("s1", "claude-code", None, "c:/x", SessionState::Working).unwrap();
+    db.upsert_session("mcp:claude-code:1", "claude-code", None, "c:/x", SessionState::Working).unwrap();
+
+    assert_eq!(db.find_open_session("claude-code", "c:/x").unwrap().as_deref(), Some("s1"));
+    assert_eq!(db.find_open_session("claude-code", "c:/y").unwrap(), None);
+
+    db.set_session_task("s1", Some(id)).unwrap();
+    db.upsert_session("s1", "claude-code", None, "c:/x", SessionState::Waiting).unwrap();
+    let session = db.get_sessions().unwrap().into_iter().find(|s| s.session_id == "s1").unwrap();
+    assert_eq!(session.task_title.as_deref(), Some("Tarefa"));
+
+    db.upsert_session("s1", "claude-code", None, "c:/x", SessionState::Ended).unwrap();
+    assert_eq!(db.find_open_session("claude-code", "c:/x").unwrap(), None);
+    assert!(db.set_session_task("nao-existe", None).is_err());
+  }
+
+  #[test]
+  fn suggestions_are_listed_and_resolved() {
+    let db = Database::open_in_memory().unwrap();
+    let id = add(&db, "Tarefa", false);
+    let s = db.add_suggestion(id, "agent:claude-code", SuggestionAction::Move, &serde_json::json!({"to": "SHELF"}), Some("parada")).unwrap();
+    assert_eq!(db.count_pending_suggestions().unwrap(), 1);
+    assert_eq!(db.get_suggestion(s).unwrap().payload["to"], "SHELF");
+
+    db.resolve_suggestion(s, SuggestionState::Rejected).unwrap();
+    assert_eq!(db.count_pending_suggestions().unwrap(), 0);
+    assert!(db.get_suggestions(true).unwrap().is_empty());
+    assert_eq!(db.get_suggestions(false).unwrap()[0].state, SuggestionState::Rejected);
+
+    // Apagar a tarefa leva junto as sugestões dela.
+    db.delete_task(id).unwrap();
+    assert!(db.get_suggestions(false).unwrap().is_empty());
   }
 
   #[test]

@@ -1,5 +1,7 @@
 use crate::dates::{self, humanize_ago, humanize_due};
-use crate::persistence::{HistoryEntry, Policy, Project, Session, SessionState, Status, Task};
+use crate::persistence::{
+  HistoryEntry, Policy, Project, Session, SessionState, Status, Suggestion, SuggestionAction, Task, AGENT_PREFIX,
+};
 use chrono::{NaiveDate, NaiveDateTime};
 use colored::{ColoredString, Colorize};
 use std::io::{self, Write};
@@ -129,9 +131,13 @@ fn policy_tag(policy: Policy) -> ColoredString {
 }
 
 pub fn project_summary(project: &Project) -> String {
-  format!("{} {}  estante {} {} carrinho {} {} feitas {}",
+  let window = project.active_window
+    .map(|m| format!(" {}", format!("[janela {m} min]").dimmed()))
+    .unwrap_or_default();
+  format!("{} {}{}  estante {} {} carrinho {} {} feitas {}",
     project.name.magenta().bold(),
     policy_tag(project.policy),
+    window,
     project.shelf, separator(), project.cart, separator(), project.done,
   )
 }
@@ -146,6 +152,19 @@ pub fn render_projects(projects: &[Project]) {
     for folder in &project.folders {
       println!("  {}", folder.dimmed());
     }
+  }
+}
+
+/// Janela de "ativo agora": `--window` vale para tudo; senão a do projeto; senão a global.
+#[derive(Clone, Copy)]
+pub struct ActiveWindow {
+  pub forced: Option<i64>,
+  pub default: i64,
+}
+
+impl ActiveWindow {
+  pub fn minutes_for(&self, session: &Session) -> i64 {
+    self.forced.or(session.project_window).unwrap_or(self.default)
   }
 }
 
@@ -173,7 +192,7 @@ fn short_session_id(id: &str) -> String {
   id.chars().take(8).collect()
 }
 
-pub fn render_sessions(sessions: &[Session], now: NaiveDateTime, window_minutes: i64) {
+pub fn render_sessions(sessions: &[Session], now: NaiveDateTime, window: ActiveWindow) {
   if sessions.is_empty() {
     println!("{}", "Nenhuma sessão de agente registrada.".dimmed());
     return;
@@ -201,14 +220,86 @@ pub fn render_sessions(sessions: &[Session], now: NaiveDateTime, window_minutes:
       let mut line = format!("  {} {}  {} {} última atividade {}",
         session.agent.yellow(),
         short_id.dimmed(),
-        session_label(session, now, window_minutes),
+        session_label(session, now, window.minutes_for(session)),
         separator(),
         ago,
       );
+      if let (Some(id), Some(title)) = (session.task_id, &session.task_title) {
+        line.push_str(&format!(" {} em {} {}", separator(), format!("#{id}").purple(), title));
+      }
       if session.project_name.is_none() {
         line.push_str(&format!(" {} {}", separator(), session.cwd.dimmed()));
       }
       println!("{line}");
+    }
+  }
+}
+
+// ---------- Sugestões ----------
+
+fn agent_display(created_by: &str) -> &str {
+  created_by.strip_prefix(AGENT_PREFIX).unwrap_or(created_by)
+}
+
+/// "concluir", "mover para o carrinho", "editar (título → 'x', prazo → 2026-11-05)", "apagar".
+pub fn describe_suggestion(suggestion: &Suggestion) -> String {
+  let payload = &suggestion.payload;
+  match suggestion.action {
+    SuggestionAction::Done => "concluir".to_string(),
+    SuggestionAction::Delete => "apagar".to_string(),
+    SuggestionAction::Move => match payload.get("to").and_then(|v| v.as_str()) {
+      Some("CART") => "mover para o carrinho".to_string(),
+      Some("SHELF") => "mover para a estante".to_string(),
+      _ => "mover".to_string(),
+    },
+    SuggestionAction::Edit => {
+      let mut changes = Vec::new();
+      if let Some(title) = payload.get("title").and_then(|v| v.as_str()) {
+        changes.push(format!("título → '{title}'"));
+      }
+      match payload.get("due") {
+        Some(serde_json::Value::Null) => changes.push("sem prazo".to_string()),
+        Some(due) => changes.push(format!("prazo → {}", due.as_str().unwrap_or("?"))),
+        None => {}
+      }
+      if let Some(daily) = payload.get("daily").and_then(|v| v.as_bool()) {
+        changes.push(if daily { "tornar diária" } else { "deixar de ser diária" }.to_string());
+      }
+      match payload.get("project") {
+        Some(serde_json::Value::Null) => changes.push("sem projeto".to_string()),
+        Some(project) => changes.push(format!("projeto → {}", project.as_str().unwrap_or("?"))),
+        None => {}
+      }
+      format!("editar ({})", changes.join(", "))
+    }
+  }
+}
+
+pub fn render_suggestions(suggestions: &[Suggestion], now: NaiveDateTime) {
+  if suggestions.is_empty() {
+    println!("{}", "Nenhuma sugestão pendente.".dimmed());
+    return;
+  }
+  for suggestion in suggestions {
+    let ago = dates::parse_datetime(&suggestion.created_at)
+      .map(|t| humanize_ago(t, now))
+      .unwrap_or_else(|| suggestion.created_at.clone());
+    let state = match suggestion.state {
+      crate::persistence::SuggestionState::Pending => "".normal(),
+      crate::persistence::SuggestionState::Approved => " aprovada".green(),
+      crate::persistence::SuggestionState::Rejected => " rejeitada".red(),
+    };
+    println!("{} {} propõe {} {} {}  {}{}",
+      format!("[{}]", suggestion.id).purple(),
+      agent_display(&suggestion.created_by).yellow(),
+      describe_suggestion(suggestion).bold(),
+      format!("#{}", suggestion.task_id).purple(),
+      suggestion.task_title,
+      ago.dimmed(),
+      state,
+    );
+    if let Some(reason) = &suggestion.reason {
+      println!("    {} {}", "motivo:".dimmed(), reason);
     }
   }
 }
