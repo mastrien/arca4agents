@@ -76,7 +76,7 @@ stdout dos hooks `SessionStart` e `UserPromptSubmit` entra no contexto do agente
 
 | Evento do hook | Estado |
 |---|---|
-| `SessionStart`, `UserPromptSubmit` | `WORKING` |
+| `SessionStart`, `UserPromptSubmit`, `PostToolUse` | `WORKING` |
 | `Stop`, `Notification` | `WAITING` |
 | `SessionEnd` | `ENDED` |
 
@@ -107,6 +107,9 @@ precisa estar no `PATH`. No Windows, o Claude Code executa hooks no Git Bash qua
     "UserPromptSubmit": [
       { "hooks": [{ "type": "command", "command": "arca ping --agent claude-code", "timeout": 5 }] }
     ],
+    "PostToolUse": [
+      { "hooks": [{ "type": "command", "command": "arca ping --agent claude-code", "timeout": 5 }] }
+    ],
     "Stop": [
       { "hooks": [{ "type": "command", "command": "arca ping --agent claude-code", "timeout": 5 }] }
     ],
@@ -124,6 +127,11 @@ precisa estar no `PATH`. No Windows, o Claude Code executa hooks no Git Bash qua
 ```
 
 Se já houver uma chave `"hooks"`, junte as entradas em vez de substituí-la.
+
+O `PostToolUse` existe porque uma pergunta ou um pedido de permissão disparam `Notification`
+("esperando você"), mas a resposta não dispara `UserPromptSubmit`. Sem ele, a sessão ficaria
+"esperando" enquanto o agente trabalha. O ping é síncrono (cerca de 60 ms) de propósito: com
+`async`, ele poderia terminar depois do `Stop` e deixar a sessão como "trabalhando".
 
 ## Board
 

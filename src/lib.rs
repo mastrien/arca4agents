@@ -318,7 +318,9 @@ pub fn agent_author(name: &str) -> String {
 /// Estado correspondente a cada evento de hook do Claude Code.
 pub fn state_for_hook_event(event: &str) -> Option<SessionState> {
   match event {
-    "SessionStart" | "UserPromptSubmit" => Some(SessionState::Working),
+    // PostToolUse cobre a volta ao trabalho depois de uma pergunta ou pedido de permissão,
+    // que disparam Notification (WAITING) mas não UserPromptSubmit.
+    "SessionStart" | "UserPromptSubmit" | "PostToolUse" => Some(SessionState::Working),
     "Stop" | "Notification" => Some(SessionState::Waiting),
     "SessionEnd" => Some(SessionState::Ended),
     _ => None,
@@ -582,6 +584,7 @@ mod tests {
   fn maps_hook_events() {
     assert_eq!(state_for_hook_event("SessionStart"), Some(SessionState::Working));
     assert_eq!(state_for_hook_event("UserPromptSubmit"), Some(SessionState::Working));
+    assert_eq!(state_for_hook_event("PostToolUse"), Some(SessionState::Working));
     assert_eq!(state_for_hook_event("Stop"), Some(SessionState::Waiting));
     assert_eq!(state_for_hook_event("Notification"), Some(SessionState::Waiting));
     assert_eq!(state_for_hook_event("SessionEnd"), Some(SessionState::Ended));
