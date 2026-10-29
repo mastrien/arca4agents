@@ -1,0 +1,19 @@
+[package]
+# O nome é referenciado pelo cargokit em ../rust_builder; não renomear sem ajustar lá.
+name = "arca_mobile"
+description = "Arca for Agents: ponte entre o app Flutter e o arca-core"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+arca-core = { workspace = true, features = ["client"] }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+flutter_rust_bridge = "=2.13.0"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
