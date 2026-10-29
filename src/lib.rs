@@ -3,14 +3,16 @@ pub mod render;
 pub mod db_path_solver;
 pub mod dates;
 pub mod paths;
+pub mod policy;
+pub mod mcp;
 
 use anyhow::{bail, Context, Result};
-use chrono::Duration;
+use chrono::{Duration, NaiveDateTime};
 use colored::Colorize;
 use std::io::{IsTerminal, Read};
 
 use crate::persistence::{
-  Authors, Database, NewTask, Policy, SessionState, Status, Task, TaskEdit, TaskFilter,
+  Authors, Database, NewTask, Policy, Session, SessionState, Status, Task, TaskEdit, TaskFilter,
   AGENT_PREFIX, META_ACTIVE_WINDOW, USER,
 };
 use crate::render::ListStyle;
@@ -348,17 +350,74 @@ pub fn active_window(db: &Database, override_minutes: Option<i64>) -> Result<i64
     .unwrap_or(DEFAULT_ACTIVE_WINDOW_MINUTES))
 }
 
-/// Painel de atividade: sessões abertas e as encerradas nas últimas 24h (ou todas com `all`).
-pub fn agents(db: &Database, all: bool, window: Option<i64>) -> Result<()> {
-  let window = active_window(db, window)?;
-  let now = dates::now();
-  let sessions: Vec<_> = db.get_sessions()?.into_iter()
+/// Sessões abertas e as encerradas nas últimas 24h (ou todas com `all`).
+fn recent_sessions(db: &Database, all: bool, now: NaiveDateTime) -> Result<Vec<Session>> {
+  Ok(db.get_sessions()?.into_iter()
     .filter(|s| {
       all || s.state != SessionState::Ended
         || dates::parse_datetime(&s.last_seen_at).is_some_and(|t| (now - t).num_hours() < 24)
     })
+    .collect())
+}
+
+/// Painel de atividade dos agentes por projeto.
+pub fn agents(db: &Database, all: bool, window: Option<i64>) -> Result<()> {
+  let window = active_window(db, window)?;
+  let now = dates::now();
+  render::render_sessions(&recent_sessions(db, all, now)?, now, window);
+  Ok(())
+}
+
+/// Largura do terminal: `--width`, senão a detectada, senão `COLUMNS`, senão 100.
+fn terminal_width(explicit: Option<usize>) -> usize {
+  explicit
+    .or_else(|| terminal_size::terminal_size().map(|(w, _)| w.0 as usize))
+    .or_else(|| std::env::var("COLUMNS").ok().and_then(|c| c.parse().ok()))
+    .unwrap_or(100)
+}
+
+pub struct BoardOptions<'a> {
+  pub project: Option<&'a str>,
+  pub authors: Authors,
+  pub width: Option<usize>,
+  pub window: Option<i64>,
+}
+
+/// Visão geral: Estante | Carrinho | Feito (hoje) e, abaixo, o painel de agentes.
+pub fn board(db: &Database, options: BoardOptions) -> Result<()> {
+  let project = optional_project_id(db, options.project)?.map(|id| db.get_project(id)).transpose()?;
+  if let Some(project) = &project {
+    println!("{}\n", render::project_summary(project));
+  }
+
+  let (mut shelf, mut cart, mut done) = (Vec::new(), Vec::new(), Vec::new());
+  let filter = TaskFilter { project_id: project.as_ref().map(|p| p.id), authors: options.authors };
+  for task in db.get_tasks(filter)? {
+    match task.status {
+      Status::Shelf => shelf.push(task),
+      Status::Cart => cart.push(task),
+      // Concluídas de dias anteriores já foram arquivadas pela virada do dia.
+      Status::Done => done.push(task),
+    }
+  }
+
+  let style = ListStyle {
+    show_id: true,
+    show_project: project.is_none(),
+    show_author: options.authors != Authors::User,
+    today: dates::today(),
+  };
+  render::render_board(&shelf, &cart, &done, &style, terminal_width(options.width));
+
+  let window = active_window(db, options.window)?;
+  let now = dates::now();
+  let sessions: Vec<_> = recent_sessions(db, false, now)?.into_iter()
+    .filter(|s| project.as_ref().is_none_or(|p| s.project_name.as_deref() == Some(p.name.as_str())))
     .collect();
-  render::render_sessions(&sessions, now, window);
+  if !sessions.is_empty() {
+    println!("\n{}", "Agentes".bold());
+    render::render_sessions(&sessions, now, window);
+  }
   Ok(())
 }
 

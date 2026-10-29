@@ -122,6 +122,39 @@ precisa estar no `PATH`. No Windows, o Claude Code executa hooks no Git Bash qua
 
 Se já houver uma chave `"hooks"`, junte as entradas em vez de substituí-la.
 
+## Board
+
+```sh
+arca board                        # Estante | Carrinho | Feito hoje, e o painel de agentes
+arca board --agents -p mestrado
+arca board --width 50             # abaixo de 72 colunas (ex.: Termux) as colunas ficam empilhadas
+```
+
+## Servidor MCP
+
+`arca mcp` é um servidor MCP (stdio) com as ferramentas `project_for_cwd`, `list_projects`,
+`list_tasks`, `add_task`, `edit_task`, `move_task`, `done_task`, `delete_task` e `report_activity`.
+Todas operam por **id** e passam pela política do projeto, aplicada no servidor:
+
+| Política | O agente pode |
+|---|---|
+| `NONE` | só ler |
+| `OWN` (padrão; também para tarefas sem projeto) | criar, e alterar/mover/concluir/apagar só as tarefas que ele criou |
+| `ALL` | gerenciar todas as tarefas do projeto |
+
+Uma violação devolve um erro de ferramenta com o motivo (ex.: "Tarefa #12 criada pelo usuário;
+política OWN ..."). `list_tasks` informa em `can_modify` o que o agente pode alterar. Tarefas criadas
+por agentes vão para a estante por padrão e ficam com `created_by = agent:<nome>`.
+
+Registro no Claude Code:
+
+```sh
+claude mcp add --scope user arca -- arca mcp --agent claude-code
+```
+
+Para agentes sem hooks, a ferramenta `report_activity` registra o estado da sessão no painel. A
+sessão é marcada como encerrada quando o servidor fecha.
+
 ## Desenvolvimento
 
 ```sh

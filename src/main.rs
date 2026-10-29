@@ -1,5 +1,5 @@
 use arca::persistence::{Authors, Database, Policy, SessionState};
-use arca::{dates, AddOptions, EditOptions, ListOptions, PingOptions, Target};
+use arca::{dates, AddOptions, BoardOptions, EditOptions, ListOptions, PingOptions, Target};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use std::process::ExitCode;
@@ -205,6 +205,34 @@ enum Commands {
         #[arg(long)]
         cwd: Option<String>,
     },
+    /// Board view: Shelf | Cart | Done today, plus agent activity
+    Board {
+        /// Only tasks of this project
+        #[arg(short, long)]
+        project: Option<String>,
+
+        /// Also show tasks created by agents
+        #[arg(long, conflicts_with = "only_agents")]
+        agents: bool,
+
+        /// Show only tasks created by agents
+        #[arg(long)]
+        only_agents: bool,
+
+        /// Terminal width (default: detected)
+        #[arg(long)]
+        width: Option<usize>,
+
+        /// Minutes without a signal before "working" becomes "possibly stopped"
+        #[arg(long)]
+        window: Option<i64>,
+    },
+    /// Run the MCP server for AI agents (stdio)
+    Mcp {
+        /// Agent name used as `created_by` (default: $ARCA_AGENT)
+        #[arg(long)]
+        agent: Option<String>,
+    },
     /// Show agent sessions per project
     Agents {
         /// Include sessions that ended more than 24h ago
@@ -282,6 +310,11 @@ fn main() -> ExitCode {
     }
 }
 
+/// `--agents` / `--only-agents` → quais autores mostrar.
+fn authors(agents: bool, only_agents: bool) -> Authors {
+    if only_agents { Authors::Agents } else if agents { Authors::All } else { Authors::User }
+}
+
 fn open_database() -> anyhow::Result<Database> {
     let db = Database::init(get_db_path()?)?;
     db.rollover_if_needed(dates::today())?;
@@ -293,8 +326,7 @@ fn run(action: Commands) -> anyhow::Result<()> {
 
     match action {
         Commands::List {shelf, cart, id, project, agents, only_agents} => {
-            let authors = if only_agents { Authors::Agents } else if agents { Authors::All } else { Authors::User };
-            arca::list(&db, ListOptions { shelf, cart, id, project: project.as_deref(), authors })
+            arca::list(&db, ListOptions { shelf, cart, id, project: project.as_deref(), authors: authors(agents, only_agents) })
         }
         Commands::Add {title, daily, shelf, due, project} => arca::add(&db, AddOptions {
             title: &title, daily, shelf, due: due.as_deref(), project: project.as_deref(),
@@ -321,6 +353,13 @@ fn run(action: Commands) -> anyhow::Result<()> {
             ProjectCommands::Unlink {folder} => arca::project_unlink(&db, folder.as_deref()),
             ProjectCommands::Which {folder} => arca::project_which(&db, folder.as_deref()),
         },
+        Commands::Board {project, agents, only_agents, width, window} => arca::board(&db, BoardOptions {
+            project: project.as_deref(), authors: authors(agents, only_agents), width, window,
+        }),
+        Commands::Mcp {agent} => {
+            let agent = arca::agent_name(agent.as_deref()).unwrap_or_else(|| "unknown".to_string());
+            arca::mcp::serve(db, agent)
+        }
         Commands::Agents {all, window} => arca::agents(&db, all, window),
         Commands::Config {action} => match action {
             ConfigCommands::ActiveWindow {minutes} => arca::config_active_window(&db, minutes),

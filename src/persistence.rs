@@ -123,6 +123,8 @@ pub struct Task {
   pub done_at: Option<String>,
   pub project_id: Option<i64>,
   pub project_name: Option<String>,
+  /// Política de agentes do projeto da tarefa (`None` quando não tem projeto).
+  pub project_policy: Option<Policy>,
   pub created_by: String,
 }
 
@@ -207,7 +209,7 @@ pub struct TaskEdit<'a> {
 }
 
 const TASK_SELECT: &str = "SELECT t.task_id, t.task_title, t.task_status, t.task_is_daily, t.created_at,
-    t.due_date, t.done_at, t.project_id, p.project_name, t.created_by
+    t.due_date, t.done_at, t.project_id, p.project_name, t.created_by, p.agent_policy
   FROM tasks t LEFT JOIN projects p ON p.project_id = t.project_id";
 
 fn task_from_row(row: &Row) -> rusqlite::Result<Task> {
@@ -222,6 +224,7 @@ fn task_from_row(row: &Row) -> rusqlite::Result<Task> {
     project_id: row.get(7)?,
     project_name: row.get(8)?,
     created_by: row.get(9)?,
+    project_policy: row.get::<_, Option<String>>(10)?.map(|p| Policy::parse(&p)).transpose()?,
   })
 }
 
@@ -584,6 +587,14 @@ impl Database {
           state = excluded.state,
           last_seen_at = DATETIME('now', 'localtime')",
       params![session_id, agent, project_id, cwd, state.as_str()],
+    )?;
+    Ok(())
+  }
+
+  pub fn end_session(&self, session_id: &str) -> anyhow::Result<()> {
+    self.conn.execute(
+      "UPDATE agent_sessions SET state = 'ENDED', last_seen_at = DATETIME('now', 'localtime') WHERE session_id = ?1",
+      params![session_id],
     )?;
     Ok(())
   }
