@@ -413,6 +413,124 @@ pub fn config_active_window(db: &Database, minutes: Option<i64>) -> Result<()> {
   Ok(())
 }
 
+// ---------- Sincronização ----------
+
+fn print_qr(text: &str) -> Result<()> {
+  use qrcode::render::unicode::Dense1x2;
+  let code = qrcode::QrCode::new(text.as_bytes())?;
+  // Cores invertidas: em terminal escuro, o "claro" precisa ser o fundo do QR.
+  let image = code.render::<Dense1x2>()
+    .dark_color(Dense1x2::Light)
+    .light_color(Dense1x2::Dark)
+    .quiet_zone(true)
+    .build();
+  println!("{image}");
+  Ok(())
+}
+
+/// Servidor de sincronização na rede de casa. Mostra o QR code de pareamento e fica no ar até Ctrl+C.
+pub fn serve(db: Database, bind: &str, port: u16, show_qr: bool) -> Result<()> {
+  use arca_core::net::server::{self, Event};
+  use std::sync::atomic::AtomicBool;
+  use std::sync::Arc;
+
+  let pairing = server::pairing(&db, port)?;
+  if pairing.urls.is_empty() {
+    eprintln!("{}", "Nenhum endereço de rede local encontrado; o celular não vai achar este PC.".yellow());
+  }
+  println!("{} {} {}", "Arca sync".bold(), pairing.name.magenta(), format!("({})", pairing.device).dimmed());
+  for url in &pairing.urls {
+    println!("  {url}");
+  }
+  if show_qr {
+    println!("\nLeia este QR code no app do celular para parear:");
+    print_qr(&pairing.to_json())?;
+  }
+  println!("Código de pareamento (para `arca sync pair` em outro PC):\n{}\n", pairing.to_json().dimmed());
+  println!("{}", "Ctrl+C para parar. No primeiro uso, o Windows pode pedir para liberar o firewall.".dimmed());
+
+  let stop = Arc::new(AtomicBool::new(false));
+  server::serve(db, bind, port, stop, |event| {
+    let time = dates::now().format("%H:%M:%S").to_string().dimmed();
+    match event {
+      Event::Pushed { client, report } => println!("{time} {} recebidas de {} ({} aplicadas, {} ignoradas, {} apagadas)",
+        "↓".green(), short_device(&client), report.applied, report.skipped, report.deleted),
+      Event::Pulled { client, rows } => println!("{time} {} {rows} linha(s) enviadas para {}", "↑".cyan(), short_device(&client)),
+      Event::Rejected { reason } => println!("{time} {} {reason}", "✗".red()),
+    }
+  })
+}
+
+fn short_device(device: &str) -> String {
+  device.chars().take(8).collect()
+}
+
+/// Pareia com um servidor a partir do código (o JSON do QR), ou de `@arquivo`.
+pub fn sync_pair(db: &Database, code: &str) -> Result<()> {
+  let text = match code.strip_prefix('@') {
+    Some(path) => std::fs::read_to_string(path).with_context(|| format!("Não consegui ler {path}"))?,
+    None => code.to_string(),
+  };
+  let pairing = arca_core::net::Pairing::from_json(&text)?;
+  let peer = arca_core::net::client::pair(db, &pairing)?;
+  println!("Pareado com {} ({}).", peer.name.magenta(), peer.url.split_whitespace().next().unwrap_or(""));
+  sync_now(db)
+}
+
+/// Sincroniza com todos os servidores pareados.
+pub fn sync_now(db: &Database) -> Result<()> {
+  let peers = arca_core::sync::peers(db)?;
+  if peers.is_empty() {
+    bail!("Nenhum servidor pareado. Rode `arca serve` no PC e use `arca sync pair <código>`.");
+  }
+  let mut failed = false;
+  for peer in peers {
+    match arca_core::net::client::sync_with(db, &peer) {
+      Ok(report) => println!("{} {}: enviadas {} (aplicadas {}), recebidas {} (aplicadas {}, apagadas {}, arquivadas {})",
+        "✓".green(), peer.name.magenta(),
+        report.pushed.applied + report.pushed.skipped, report.pushed.applied,
+        report.pulled.applied + report.pulled.skipped, report.pulled.applied, report.pulled.deleted, report.pulled.archived),
+      Err(error) => {
+        failed = true;
+        eprintln!("{} {}: {error:#}", "✗".red(), peer.name.magenta());
+      }
+    }
+  }
+  if failed {
+    bail!("Alguma sincronização falhou");
+  }
+  Ok(())
+}
+
+pub fn sync_peers(db: &Database) -> Result<()> {
+  let peers = arca_core::sync::peers(db)?;
+  if peers.is_empty() {
+    println!("{}", "Nenhum servidor pareado.".dimmed());
+  }
+  for peer in peers {
+    println!("{} {}  {}  última sincronização: {}",
+      peer.name.magenta(), short_device(&peer.device).dimmed(),
+      peer.url.split_whitespace().next().unwrap_or(""),
+      peer.last_synced_at.as_deref().unwrap_or("nunca"));
+  }
+  Ok(())
+}
+
+pub fn sync_unpair(db: &Database, who: &str) -> Result<()> {
+  let peer = arca_core::sync::peers(db)?.into_iter()
+    .find(|p| p.device == who || p.device.starts_with(who) || p.name.eq_ignore_ascii_case(who))
+    .with_context(|| format!("Nenhum servidor pareado chamado '{who}' (veja `arca sync peers`)"))?;
+  arca_core::sync::remove_peer(db, &peer.device)?;
+  println!("Pareamento com {} removido.", peer.name);
+  Ok(())
+}
+
+pub fn sync_rotate_token(db: &Database) -> Result<()> {
+  arca_core::sync::rotate_server_token(db)?;
+  println!("Token trocado: os aparelhos pareados com este PC precisam parear de novo.");
+  Ok(())
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;

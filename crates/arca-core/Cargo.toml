@@ -14,3 +14,12 @@ chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid = { version = "1.29.0", features = ["v4"] }
+ureq = { version = "3.5", default-features = false, features = ["json"], optional = true }
+tiny_http = { version = "0.12", optional = true }
+local-ip-address = { version = "0.6", optional = true }
+
+[features]
+# Servidor de sincronização (`arca serve`, app desktop).
+server = ["dep:tiny_http", "dep:local-ip-address"]
+# Cliente de sincronização (celular; também a CLI, para testes entre dois PCs).
+client = ["dep:ureq"]

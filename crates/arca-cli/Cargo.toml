@@ -9,7 +9,7 @@ name = "arca"
 path = "src/main.rs"
 
 [dependencies]
-arca-core.workspace = true
+arca-core = { workspace = true, features = ["server", "client"] }
 anyhow.workspace = true
 chrono.workspace = true
 serde.workspace = true
@@ -19,3 +19,4 @@ colored = "3.1.1"
 rmcp = { version = "3.8.0", features = ["server", "macros", "transport-io"] }
 tokio = { version = "1.54.1", features = ["rt", "macros", "io-std"] }
 terminal_size = "0.4.4"
+qrcode = { version = "0.14", default-features = false }

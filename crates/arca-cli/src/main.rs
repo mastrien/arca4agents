@@ -262,6 +262,39 @@ enum Commands {
         #[command(subcommand)]
         action: ConfigCommands,
     },
+    /// Run the sync server for the home network (shows the pairing QR code)
+    Serve {
+        /// Port to listen on
+        #[arg(long, default_value_t = arca_core::net::DEFAULT_PORT)]
+        port: u16,
+
+        /// Address to listen on
+        #[arg(long, default_value = "0.0.0.0")]
+        bind: String,
+
+        /// Don't print the QR code
+        #[arg(long)]
+        no_qr: bool,
+    },
+    /// Sync with paired servers
+    Sync {
+        #[command(subcommand)]
+        action: SyncCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum SyncCommands {
+    /// Pair with a server using its pairing code (the QR code JSON, or @file)
+    Pair { code: String },
+    /// Sync now with every paired server
+    Now,
+    /// List paired servers
+    Peers,
+    /// Forget a paired server (by name or device id)
+    Unpair { who: String },
+    /// Change this server's token (every paired device must pair again)
+    RotateToken,
 }
 
 #[derive(Subcommand)]
@@ -384,6 +417,14 @@ fn run(action: Commands) -> anyhow::Result<()> {
         Commands::Agents {all, window} => arca::agents(&db, all, window),
         Commands::Config {action} => match action {
             ConfigCommands::ActiveWindow {minutes} => arca::config_active_window(&db, minutes),
+        },
+        Commands::Serve {port, bind, no_qr} => arca::serve(db, &bind, port, !no_qr),
+        Commands::Sync {action} => match action {
+            SyncCommands::Pair {code} => arca::sync_pair(&db, &code),
+            SyncCommands::Now => arca::sync_now(&db),
+            SyncCommands::Peers => arca::sync_peers(&db),
+            SyncCommands::Unpair {who} => arca::sync_unpair(&db, &who),
+            SyncCommands::RotateToken => arca::sync_rotate_token(&db),
         },
         Commands::Ping {..} => unreachable!("handled in main"),
     }

@@ -186,6 +186,25 @@ arca reject 4
 
 O `list` avisa quando há sugestões pendentes, e o `board` as mostra no fim.
 
+## Sincronização na rede de casa
+
+O PC roda o servidor, e os outros aparelhos (o app do celular, ou outro PC com a CLI) sincronizam
+com ele. Cada aparelho tem uma cópia completa e funciona offline. Na sincronização, a edição mais
+recente de cada item vence, e as exclusões também são propagadas. Detalhes em [`spec-apps.md`](spec-apps.md).
+
+```sh
+arca serve                        # no PC: mostra o QR code e o código de pareamento (porta 7377)
+arca sync pair '<código>'         # no outro aparelho; também aceita @arquivo
+arca sync now                     # envia e recebe
+arca sync peers
+arca sync unpair DESKTOP-XYZ
+arca sync rotate-token            # no PC: invalida todos os pareamentos
+```
+
+O tráfego é HTTP sem criptografia, protegido por um token. Isso basta na rede de casa, mas não
+exponha a porta na internet. No primeiro `arca serve`, o Windows pede para liberar o firewall
+(redes privadas).
+
 ## Desenvolvimento
 
 ```
