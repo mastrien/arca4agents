@@ -1,7 +1,7 @@
+use crate::agents::{self, Activity, ActiveWindow};
 use crate::dates::{self, humanize_ago, humanize_due};
-use crate::persistence::{
-  HistoryEntry, Policy, Project, Session, SessionState, Status, Suggestion, SuggestionAction, Task, AGENT_PREFIX,
-};
+use crate::persistence::{HistoryEntry, Policy, Project, Session, Status, Suggestion, Task, AGENT_PREFIX};
+use crate::suggestions;
 use chrono::{NaiveDate, NaiveDateTime};
 use colored::{ColoredString, Colorize};
 use std::io::{self, Write};
@@ -155,29 +155,13 @@ pub fn render_projects(projects: &[Project]) {
   }
 }
 
-/// Janela de "ativo agora": `--window` vale para tudo; senão a do projeto; senão a global.
-#[derive(Clone, Copy)]
-pub struct ActiveWindow {
-  pub forced: Option<i64>,
-  pub default: i64,
-}
-
-impl ActiveWindow {
-  pub fn minutes_for(&self, session: &Session) -> i64 {
-    self.forced.or(session.project_window).unwrap_or(self.default)
-  }
-}
-
 /// Como uma sessão aparece no painel de atividade.
-pub fn session_label(session: &Session, now: NaiveDateTime, window_minutes: i64) -> ColoredString {
-  let last_seen = dates::parse_datetime(&session.last_seen_at);
-  match session.state {
-    SessionState::Working => {
-      let fresh = last_seen.is_some_and(|t| (now - t).num_minutes() < window_minutes);
-      if fresh { "trabalhando".green().bold() } else { "possivelmente parada".yellow() }
-    }
-    SessionState::Waiting => "esperando você".cyan().bold(),
-    SessionState::Ended => "encerrada".dimmed(),
+pub fn session_label(session: &Session, now: NaiveDateTime, window: ActiveWindow) -> ColoredString {
+  match agents::activity(session, now, window) {
+    Activity::Working => "trabalhando".green().bold(),
+    Activity::PossiblyStopped => "possivelmente parada".yellow(),
+    Activity::Waiting => "esperando você".cyan().bold(),
+    Activity::Ended => "encerrada".dimmed(),
   }
 }
 
@@ -220,7 +204,7 @@ pub fn render_sessions(sessions: &[Session], now: NaiveDateTime, window: ActiveW
       let mut line = format!("  {} {}  {} {} última atividade {}",
         session.agent.yellow(),
         short_id.dimmed(),
-        session_label(session, now, window.minutes_for(session)),
+        session_label(session, now, window),
         separator(),
         ago,
       );
@@ -241,40 +225,6 @@ fn agent_display(created_by: &str) -> &str {
   created_by.strip_prefix(AGENT_PREFIX).unwrap_or(created_by)
 }
 
-/// "concluir", "mover para o carrinho", "editar (título → 'x', prazo → 2026-11-05)", "apagar".
-pub fn describe_suggestion(suggestion: &Suggestion) -> String {
-  let payload = &suggestion.payload;
-  match suggestion.action {
-    SuggestionAction::Done => "concluir".to_string(),
-    SuggestionAction::Delete => "apagar".to_string(),
-    SuggestionAction::Move => match payload.get("to").and_then(|v| v.as_str()) {
-      Some("CART") => "mover para o carrinho".to_string(),
-      Some("SHELF") => "mover para a estante".to_string(),
-      _ => "mover".to_string(),
-    },
-    SuggestionAction::Edit => {
-      let mut changes = Vec::new();
-      if let Some(title) = payload.get("title").and_then(|v| v.as_str()) {
-        changes.push(format!("título → '{title}'"));
-      }
-      match payload.get("due") {
-        Some(serde_json::Value::Null) => changes.push("sem prazo".to_string()),
-        Some(due) => changes.push(format!("prazo → {}", due.as_str().unwrap_or("?"))),
-        None => {}
-      }
-      if let Some(daily) = payload.get("daily").and_then(|v| v.as_bool()) {
-        changes.push(if daily { "tornar diária" } else { "deixar de ser diária" }.to_string());
-      }
-      match payload.get("project") {
-        Some(serde_json::Value::Null) => changes.push("sem projeto".to_string()),
-        Some(project) => changes.push(format!("projeto → {}", project.as_str().unwrap_or("?"))),
-        None => {}
-      }
-      format!("editar ({})", changes.join(", "))
-    }
-  }
-}
-
 pub fn render_suggestions(suggestions: &[Suggestion], now: NaiveDateTime) {
   if suggestions.is_empty() {
     println!("{}", "Nenhuma sugestão pendente.".dimmed());
@@ -292,7 +242,7 @@ pub fn render_suggestions(suggestions: &[Suggestion], now: NaiveDateTime) {
     println!("{} {} propõe {} {} {}  {}{}",
       format!("[{}]", suggestion.id).purple(),
       agent_display(&suggestion.created_by).yellow(),
-      describe_suggestion(suggestion).bold(),
+      suggestions::describe(suggestion).bold(),
       format!("#{}", suggestion.task_id).purple(),
       suggestion.task_title,
       ago.dimmed(),

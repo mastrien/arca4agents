@@ -230,7 +230,7 @@ impl ArcaServer {
   pub fn new(db: Database, agent: String) -> Self {
     Self {
       db: Arc::new(Mutex::new(db)),
-      author: crate::agent_author(&agent),
+      author: crate::agents::agent_author(&agent),
       session_id: format!("mcp:{agent}:{}", std::process::id()),
       agent,
       reported: Arc::new(AtomicBool::new(false)),
@@ -521,7 +521,7 @@ impl ArcaServer {
       Ok(json!({
         "suggestion_id": id,
         "task_id": task.id,
-        "summary": crate::render::describe_suggestion(&suggestion),
+        "summary": crate::suggestions::describe(&suggestion),
         "state": suggestion.state.as_str(),
         "note": "Aguardando o usuário aprovar ou rejeitar (arca suggestions).",
       }))
@@ -538,7 +538,7 @@ impl ArcaServer {
         "suggestion_id": s.id,
         "task_id": s.task_id,
         "task_title": s.task_title,
-        "summary": crate::render::describe_suggestion(s),
+        "summary": crate::suggestions::describe(s),
         "reason": s.reason,
         "state": s.state.as_str(),
         "created_at": s.created_at,

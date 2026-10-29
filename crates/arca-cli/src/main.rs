@@ -1,5 +1,5 @@
 use arca::persistence::{Authors, Database, Policy, SessionState};
-use arca::{dates, AddOptions, BoardOptions, EditOptions, ListOptions, PingOptions, Target};
+use arca::{dates, AddOptions, BoardOptions, EditOptions, ListOptions, Ping, Target};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use std::process::ExitCode;
@@ -307,7 +307,7 @@ fn main() -> ExitCode {
 
     if let Commands::Ping { state, agent, session, cwd, task } = &args.action {
         // Roda dentro de hooks: nunca pode falhar o hook nem escrever no stdout.
-        let options = PingOptions {
+        let options = Ping {
             state: state.map(Into::into),
             agent: agent.as_deref(),
             session: session.as_deref(),
@@ -378,7 +378,7 @@ fn run(action: Commands) -> anyhow::Result<()> {
             let agent = arca::agent_name(agent.as_deref()).unwrap_or_else(|| "unknown".to_string());
             arca::mcp::serve(db, agent)
         }
-        Commands::Suggestions {all} => arca::suggestions(&db, all),
+        Commands::Suggestions {all} => arca::list_suggestions(&db, all),
         Commands::Approve {id} => arca::approve(&db, id),
         Commands::Reject {id} => arca::reject(&db, id),
         Commands::Agents {all, window} => arca::agents(&db, all, window),
@@ -390,7 +390,7 @@ fn run(action: Commands) -> anyhow::Result<()> {
 }
 
 /// Executa o ping engolindo erros e panics; falhas vão para `ping-errors.log` ao lado do banco.
-fn silent_ping(options: PingOptions) {
+fn silent_ping(options: Ping) {
     std::panic::set_hook(Box::new(|_| {}));
     let result = std::panic::catch_unwind(|| -> anyhow::Result<()> {
         let db = Database::init(get_db_path()?)?;

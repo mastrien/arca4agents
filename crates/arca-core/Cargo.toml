@@ -1,0 +1,15 @@
+[package]
+name = "arca-core"
+description = "Núcleo do Arca for Agents: banco, rollover, projetos, política de agentes e sincronização"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite_migration = { version = "1", features = ["from-directory"] }
+include_dir = "0.7"
+directories = "5"
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true

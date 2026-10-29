@@ -1,23 +1,18 @@
-pub mod persistence;
 pub mod render;
-pub mod db_path_solver;
-pub mod dates;
-pub mod paths;
-pub mod policy;
 pub mod mcp;
 
+// O núcleo mora em `arca-core`; reexportado para manter os caminhos `crate::persistence` etc.
+pub use arca_core::{agents, db_path_solver, dates, paths, persistence, policy, suggestions};
+
 use anyhow::{bail, Context, Result};
-use chrono::{Duration, NaiveDateTime};
+use chrono::Duration;
 use colored::Colorize;
 use std::io::{IsTerminal, Read};
 
-use crate::persistence::{
-  Authors, Database, NewTask, Policy, Session, SessionState, Status, Suggestion, SuggestionAction,
-  SuggestionState, Task, TaskEdit, TaskFilter, AGENT_PREFIX, META_ACTIVE_WINDOW, USER,
-};
-use crate::render::{ActiveWindow, ListStyle};
+use crate::agents::ActiveWindow;
+use crate::persistence::{Authors, Database, NewTask, Policy, Status, Task, TaskEdit, TaskFilter, USER};
+use crate::render::ListStyle;
 
-pub const DEFAULT_ACTIVE_WINDOW_MINUTES: i64 = 10;
 
 /// Como o usuário aponta para uma tarefa: posição na listagem ou id.
 #[derive(Clone, Copy)]
@@ -238,7 +233,7 @@ pub fn project_window(db: &Database, name: &str, minutes: Option<&str>) -> Resul
   match clearable(minutes, parse_minutes)? {
     None => match db.get_project(id)?.active_window {
       Some(m) => println!("{name}: janela {m} min"),
-      None => println!("{name}: usa a janela global ({} min)", active_window(db, None)?),
+      None => println!("{name}: usa a janela global ({} min)", agents::global_window(db)?),
     },
     Some(value) => {
       db.set_project_window(id, value)?;
@@ -302,75 +297,12 @@ pub fn project_which(db: &Database, folder: Option<&str>) -> Result<()> {
 
 // ---------- Agentes ----------
 
-/// Nome do agente: argumento explícito, senão `ARCA_AGENT`. Aceita com ou sem o prefixo `agent:`.
-pub fn agent_name(explicit: Option<&str>) -> Option<String> {
-  let raw = explicit.map(str::to_string).or_else(|| std::env::var("ARCA_AGENT").ok())?;
-  let name = raw.trim();
-  let name = name.strip_prefix(AGENT_PREFIX).unwrap_or(name).trim();
-  if name.is_empty() { None } else { Some(name.to_string()) }
-}
-
-/// Valor de `created_by` para tarefas criadas por um agente.
-pub fn agent_author(name: &str) -> String {
-  format!("{AGENT_PREFIX}{name}")
-}
-
-/// Estado correspondente a cada evento de hook do Claude Code.
-pub fn state_for_hook_event(event: &str) -> Option<SessionState> {
-  match event {
-    // PostToolUse cobre a volta ao trabalho depois de uma pergunta ou pedido de permissão,
-    // que disparam Notification (WAITING) mas não UserPromptSubmit.
-    "SessionStart" | "UserPromptSubmit" | "PostToolUse" => Some(SessionState::Working),
-    "Stop" | "Notification" => Some(SessionState::Waiting),
-    "SessionEnd" => Some(SessionState::Ended),
-    _ => None,
-  }
-}
-
-pub struct PingOptions<'a> {
-  pub state: Option<SessionState>,
-  pub agent: Option<&'a str>,
-  pub session: Option<&'a str>,
-  pub cwd: Option<&'a str>,
-  /// Liga a sessão a uma tarefa (para agentes que registram atividade por script).
-  pub task: Option<i64>,
-}
+pub use arca_core::agents::{agent_author, agent_name, Ping};
 
 /// Registra um sinal de vida de uma sessão de agente. Pensado para hooks:
 /// lê o JSON do hook no stdin (`session_id`, `cwd`, `hook_event_name`) e não escreve nada no stdout.
-pub fn ping(db: &Database, options: PingOptions) -> Result<()> {
-  let input = read_hook_input()?;
-  let field = |name: &str| input.get(name).and_then(|v| v.as_str()).map(str::to_string);
-
-  let state = match options.state {
-    Some(state) => state,
-    None => match field("hook_event_name") {
-      Some(event) => match state_for_hook_event(&event) {
-        Some(state) => state,
-        // Evento que não muda o estado (ex.: PreToolUse): ignora em silêncio.
-        None => return Ok(()),
-      },
-      None => bail!("ping sem --state e sem hook_event_name no stdin"),
-    },
-  };
-
-  let agent = agent_name(options.agent).unwrap_or_else(|| "unknown".to_string());
-  let cwd = match options.cwd.map(str::to_string).or_else(|| field("cwd")) {
-    Some(cwd) => paths::normalize(&cwd)?,
-    None => paths::normalize(&std::env::current_dir()?.to_string_lossy())?,
-  };
-  let session_id = options.session.map(str::to_string)
-    .or_else(|| field("session_id"))
-    .unwrap_or_else(|| format!("manual:{agent}:{cwd}"));
-
-  let project_id = db.project_for_path(&cwd)?;
-  db.upsert_session(&session_id, &agent, project_id, &cwd, state)?;
-  if let Some(task) = options.task {
-    db.get_task(task)?;
-    db.set_session_task(&session_id, Some(task))?;
-  }
-  db.prune_sessions(30)?;
-  Ok(())
+pub fn ping(db: &Database, ping: Ping) -> Result<()> {
+  agents::record_ping(db, ping, &read_hook_input()?)
 }
 
 fn read_hook_input() -> Result<serde_json::Value> {
@@ -386,30 +318,11 @@ fn read_hook_input() -> Result<serde_json::Value> {
   serde_json::from_str(&raw).context("stdin do hook não é JSON válido")
 }
 
-pub fn active_window(db: &Database, override_minutes: Option<i64>) -> Result<i64> {
-  if let Some(minutes) = override_minutes {
-    return Ok(minutes);
-  }
-  Ok(db.get_meta(META_ACTIVE_WINDOW)?
-    .and_then(|v| v.parse().ok())
-    .unwrap_or(DEFAULT_ACTIVE_WINDOW_MINUTES))
-}
-
-/// Sessões abertas e as encerradas nas últimas 24h (ou todas com `all`).
-fn recent_sessions(db: &Database, all: bool, now: NaiveDateTime) -> Result<Vec<Session>> {
-  Ok(db.get_sessions()?.into_iter()
-    .filter(|s| {
-      all || s.state != SessionState::Ended
-        || dates::parse_datetime(&s.last_seen_at).is_some_and(|t| (now - t).num_hours() < 24)
-    })
-    .collect())
-}
-
 /// Painel de atividade dos agentes por projeto.
 pub fn agents(db: &Database, all: bool, window: Option<i64>) -> Result<()> {
-  let window = ActiveWindow { forced: window, default: active_window(db, None)? };
+  let window = ActiveWindow::load(db, window)?;
   let now = dates::now();
-  render::render_sessions(&recent_sessions(db, all, now)?, now, window);
+  render::render_sessions(&agents::recent_sessions(db, all, now)?, now, window);
   Ok(())
 }
 
@@ -454,9 +367,9 @@ pub fn board(db: &Database, options: BoardOptions) -> Result<()> {
   };
   render::render_board(&shelf, &cart, &done, &style, terminal_width(options.width));
 
-  let window = ActiveWindow { forced: options.window, default: active_window(db, None)? };
+  let window = ActiveWindow::load(db, options.window)?;
   let now = dates::now();
-  let sessions: Vec<_> = recent_sessions(db, false, now)?.into_iter()
+  let sessions: Vec<_> = agents::recent_sessions(db, false, now)?.into_iter()
     .filter(|s| project.as_ref().is_none_or(|p| s.project_name.as_deref() == Some(p.name.as_str())))
     .collect();
   if !sessions.is_empty() {
@@ -475,129 +388,34 @@ pub fn board(db: &Database, options: BoardOptions) -> Result<()> {
 
 // ---------- Sugestões ----------
 
-pub fn suggestions(db: &Database, all: bool) -> Result<()> {
+pub fn list_suggestions(db: &Database, all: bool) -> Result<()> {
   render::render_suggestions(&db.get_suggestions(!all)?, dates::now());
   Ok(())
 }
 
-fn pending_suggestion(db: &Database, id: i64) -> Result<Suggestion> {
-  let suggestion = db.get_suggestion(id)?;
-  if suggestion.state != SuggestionState::Pending {
-    bail!("A sugestão [{id}] já foi resolvida");
-  }
-  Ok(suggestion)
-}
-
-/// Aplica a mudança proposta, com as permissões do usuário.
-fn apply_suggestion(db: &Database, suggestion: &Suggestion) -> Result<()> {
-  let payload = &suggestion.payload;
-  let id = suggestion.task_id;
-  match suggestion.action {
-    SuggestionAction::Done => db.change_task_status(id, Status::Done),
-    SuggestionAction::Delete => db.delete_task(id),
-    SuggestionAction::Move => {
-      let to = match payload.get("to").and_then(|v| v.as_str()) {
-        Some("CART") => Status::Cart,
-        Some("SHELF") => Status::Shelf,
-        other => bail!("Destino inválido na sugestão: {other:?}"),
-      };
-      db.change_task_status(id, to)
-    }
-    SuggestionAction::Edit => {
-      let due_date = match payload.get("due") {
-        None => None,
-        Some(serde_json::Value::Null) => Some(None),
-        Some(v) => Some(Some(dates::parse_due(v.as_str().unwrap_or_default(), dates::today())?)),
-      };
-      let project_id = match payload.get("project") {
-        None => None,
-        Some(serde_json::Value::Null) => Some(None),
-        Some(v) => Some(Some(db.project_id(v.as_str().unwrap_or_default())?)),
-      };
-      db.edit_task(id, TaskEdit {
-        title: payload.get("title").and_then(|v| v.as_str()),
-        daily: payload.get("daily").and_then(|v| v.as_bool()),
-        due_date,
-        project_id,
-      })
-    }
-  }
-}
-
 pub fn approve(db: &Database, id: i64) -> Result<()> {
-  let suggestion = pending_suggestion(db, id)?;
-  apply_suggestion(db, &suggestion)?;
-  // Se a sugestão era apagar, a linha dela já saiu junto com a tarefa.
-  db.resolve_suggestion(id, SuggestionState::Approved)?;
-  println!("{} {} #{} {}", "Aprovada:".green(), render::describe_suggestion(&suggestion), suggestion.task_id, suggestion.task_title);
+  let suggestion = suggestions::approve(db, id)?;
+  println!("{} {} #{} {}", "Aprovada:".green(), suggestions::describe(&suggestion), suggestion.task_id, suggestion.task_title);
   Ok(())
 }
 
 pub fn reject(db: &Database, id: i64) -> Result<()> {
-  let suggestion = pending_suggestion(db, id)?;
-  db.resolve_suggestion(id, SuggestionState::Rejected)?;
-  println!("{} {} #{} {}", "Rejeitada:".red(), render::describe_suggestion(&suggestion), suggestion.task_id, suggestion.task_title);
+  let suggestion = suggestions::reject(db, id)?;
+  println!("{} {} #{} {}", "Rejeitada:".red(), suggestions::describe(&suggestion), suggestion.task_id, suggestion.task_title);
   Ok(())
 }
 
 pub fn config_active_window(db: &Database, minutes: Option<i64>) -> Result<()> {
-  match minutes {
-    Some(m) if m <= 0 => bail!("A janela precisa ser maior que zero"),
-    Some(m) => {
-      db.set_meta(META_ACTIVE_WINDOW, &m.to_string())?;
-      println!("active-window = {m} min");
-    }
-    None => println!("active-window = {} min", active_window(db, None)?),
+  if let Some(m) = minutes {
+    agents::set_global_window(db, m)?;
   }
+  println!("active-window = {} min", agents::global_window(db)?);
   Ok(())
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  #[test]
-  fn approving_applies_the_suggested_change() {
-    let db = Database::open_in_memory().unwrap();
-    let project = db.add_project("arca", Policy::Own).unwrap();
-    let id = db.add_task(NewTask { title: "x", daily: false, status: Status::Cart, due_date: None, project_id: Some(project), created_by: USER }).unwrap();
-
-    let edit = db.add_suggestion(id, "agent:claude-code", SuggestionAction::Edit,
-      &serde_json::json!({"title": "novo", "due": "2026-11-05", "project": null}), None).unwrap();
-    approve(&db, edit).unwrap();
-    let task = db.get_task(id).unwrap();
-    assert_eq!(task.title, "novo");
-    assert_eq!(task.due_date.map(|d| d.to_string()).as_deref(), Some("2026-11-05"));
-    assert_eq!(task.project_id, None);
-    assert!(approve(&db, edit).is_err(), "não aprova duas vezes");
-
-    let move_ = db.add_suggestion(id, "agent:claude-code", SuggestionAction::Move, &serde_json::json!({"to": "SHELF"}), None).unwrap();
-    reject(&db, move_).unwrap();
-    assert_eq!(db.get_task(id).unwrap().status, Status::Cart);
-
-    let delete = db.add_suggestion(id, "agent:claude-code", SuggestionAction::Delete, &serde_json::json!({}), None).unwrap();
-    approve(&db, delete).unwrap();
-    assert!(db.get_task(id).is_err());
-  }
-
-  #[test]
-  fn maps_hook_events() {
-    assert_eq!(state_for_hook_event("SessionStart"), Some(SessionState::Working));
-    assert_eq!(state_for_hook_event("UserPromptSubmit"), Some(SessionState::Working));
-    assert_eq!(state_for_hook_event("PostToolUse"), Some(SessionState::Working));
-    assert_eq!(state_for_hook_event("Stop"), Some(SessionState::Waiting));
-    assert_eq!(state_for_hook_event("Notification"), Some(SessionState::Waiting));
-    assert_eq!(state_for_hook_event("SessionEnd"), Some(SessionState::Ended));
-    assert_eq!(state_for_hook_event("PreToolUse"), None);
-  }
-
-  #[test]
-  fn normalizes_agent_name() {
-    assert_eq!(agent_name(Some("claude-code")).as_deref(), Some("claude-code"));
-    assert_eq!(agent_name(Some("agent:claude-code")).as_deref(), Some("claude-code"));
-    assert_eq!(agent_name(Some("  ")), None);
-    assert_eq!(agent_author("claude-code"), "agent:claude-code");
-  }
 
   #[test]
   fn positions_follow_the_user_view() {
