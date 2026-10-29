@@ -1,0 +1,24 @@
+[package]
+name = "arca-desktop"
+version.workspace = true
+description = "Arca for Agents: app desktop"
+authors = ["mastrien"]
+edition.workspace = true
+
+[lib]
+# O sufixo `_lib` evita conflito de nome com o binário no Windows (rust-lang/cargo#8519).
+name = "arca_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+arca-core = { workspace = true, features = ["server"] }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }

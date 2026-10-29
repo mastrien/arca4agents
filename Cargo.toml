@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/arca-core", "crates/arca-cli"]
+members = ["crates/arca-core", "crates/arca-cli", "apps/desktop/src-tauri"]
 resolver = "3"
 
 [workspace.package]
@@ -12,3 +12,11 @@ anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1"
+
+# Perfil de release (https://tauri.app/concept/size/). Sem `panic = "abort"`: o `arca ping`
+# usa catch_unwind para nunca derrubar um hook.
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true
