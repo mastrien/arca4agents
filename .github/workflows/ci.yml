@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    name: Rust (núcleo e CLI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # O app desktop (Tauri) e a ponte do Flutter ficam de fora: precisam de dependências de
+      # sistema próprias e são compilados no workflow de release.
+      - run: cargo test -p arca-core --all-features
+      - run: cargo test -p arca
+      - run: cargo clippy -p arca-core -p arca --all-targets --all-features -- -D warnings
+
+  flutter:
+    name: Flutter (análise)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.0
+      - run: flutter pub get
+      - run: flutter analyze
+
+  desktop-frontend:
+    name: Desktop (TypeScript)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - run: npm ci
+      - run: npm run build

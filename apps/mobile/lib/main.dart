@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:ota_update/ota_update.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'models.dart';
@@ -8,6 +9,7 @@ import 'screens.dart';
 import 'src/rust/api/arca.dart' as arca;
 import 'src/rust/frb_generated.dart';
 import 'store.dart';
+import 'updater.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -49,8 +51,29 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int tab = 0; // 0 carrinho, 1 estante, 2 feito, 3 agentes
+  AppUpdate? update;
+  String? updateStatus;
 
   ArcaStore get store => widget.store;
+
+  @override
+  void initState() {
+    super.initState();
+    AppUpdate.check().then((u) => mounted ? setState(() => update = u) : null);
+  }
+
+  void installUpdate() {
+    setState(() => updateStatus = 'baixando…');
+    update!.install().listen(
+      (event) => setState(() => updateStatus = switch (event.status) {
+            OtaStatus.DOWNLOADING => 'baixando ${event.value ?? ''}%',
+            OtaStatus.INSTALLING || OtaStatus.INSTALLATION_DONE => 'abrindo o instalador…',
+            OtaStatus.CHECKSUM_ERROR => 'o arquivo baixado não confere; tente de novo',
+            _ => 'falhou (${event.status.name}); tente de novo',
+          }),
+      onError: (e) => setState(() => updateStatus = 'falhou: $e'),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -102,6 +125,14 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           body: Column(
             children: [
+              if (update != null)
+                MaterialBanner(
+                  content: Text(updateStatus ?? 'Nova versão ${update!.version} disponível.'),
+                  actions: [
+                    TextButton(onPressed: () => setState(() => update = null), child: const Text('Depois')),
+                    FilledButton(onPressed: updateStatus == null ? installUpdate : null, child: const Text('Atualizar')),
+                  ],
+                ),
               if (store.error != null)
                 MaterialBanner(
                   content: Text(store.error!),

@@ -205,6 +205,26 @@ O tráfego é HTTP sem criptografia, protegido por um token. Isso basta na rede 
 exponha a porta na internet. No primeiro `arca serve`, o Windows pede para liberar o firewall
 (redes privadas).
 
+## Apps e releases
+
+- **Desktop (Tauri):** [`apps/desktop`](apps/desktop). **Celular (Flutter):** [`apps/mobile`](apps/mobile).
+- Os instaladores saem no [GitHub Releases](https://github.com/mastrien/arca4agents/releases). Depois
+  da primeira instalação, os dois apps avisam quando há versão nova e se atualizam por conta própria;
+  no Android, o sistema pede uma confirmação.
+
+Para publicar uma versão:
+
+```sh
+python scripts/version.py 0.5.0     # acerta Cargo, Tauri, package.json e pubspec
+git commit -am "v0.5.0" && git tag v0.5.0 && git push && git push --tags
+```
+
+O workflow `release.yml` gera o instalador Windows assinado (com o `latest.json` do updater), a
+CLI e o APK assinado, e só publica o release quando todos os arquivos subiram. Ele precisa destes
+secrets do repositório: `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`,
+`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`. As chaves ficam fora do
+repositório e **precisam de backup**: sem elas, os apps instalados deixam de aceitar atualizações.
+
 ## Desenvolvimento
 
 ```

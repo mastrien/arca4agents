@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check, Update } from "@tauri-apps/plugin-updater";
 import {
   api,
   Authors,
@@ -98,6 +100,8 @@ export default function App() {
         <button onClick={() => setModal({ kind: "sync" })}>Sincronização</button>
       </header>
 
+      <UpdateBanner />
+
       {error && (
         <div className="error" onClick={() => setError(null)} title="Fechar">
           {error}
@@ -122,6 +126,60 @@ export default function App() {
       {modal?.kind === "projects" && <Projects projects={board.projects} onClose={() => setModal(null)} run={run} />}
       {modal?.kind === "sync" && <Sync onClose={() => setModal(null)} />}
       {modal?.kind === "history" && <History onClose={() => setModal(null)} />}
+    </div>
+  );
+}
+
+// ---------- Atualização automática ----------
+
+// Procura uma versão nova no último release do GitHub ao abrir e a cada 6 h.
+const UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
+
+function UpdateBanner() {
+  const [update, setUpdate] = useState<Update | null>(null);
+  const [progress, setProgress] = useState<string | null>(null);
+
+  useEffect(() => {
+    const look = () => check().then(setUpdate).catch(() => {}); // sem rede: tenta de novo depois
+    look();
+    const timer = setInterval(look, UPDATE_CHECK_MS);
+    return () => clearInterval(timer);
+  }, []);
+
+  if (!update) return null;
+
+  async function install() {
+    if (!update) return;
+    let total = 0;
+    let received = 0;
+    setProgress("baixando…");
+    try {
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Started") total = event.data.contentLength ?? 0;
+        if (event.event === "Progress") {
+          received += event.data.chunkLength;
+          if (total) setProgress(`baixando ${Math.round((received / total) * 100)}%`);
+        }
+        if (event.event === "Finished") setProgress("instalando…");
+      });
+      await relaunch();
+    } catch (e) {
+      setProgress(`falhou: ${errorText(e)}`);
+    }
+  }
+
+  return (
+    <div className="update">
+      <span>
+        Nova versão <strong>{update.version}</strong> disponível.
+      </span>
+      {progress ? (
+        <span className="muted">{progress}</span>
+      ) : (
+        <button className="primary" onClick={install}>
+          Atualizar e reiniciar
+        </button>
+      )}
     </div>
   );
 }

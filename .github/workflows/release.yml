@@ -1,0 +1,120 @@
+name: Release
+
+# Para publicar: `python scripts/version.py X.Y.Z`, commit, `git tag vX.Y.Z`, `git push --tags`.
+# O release nasce como rascunho e só é publicado quando todos os artefatos subiram, porque os
+# apps buscam a atualização em "releases/latest" e não podem ver uma versão pela metade.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    name: Conferir versão
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/version.py --check "${{ github.ref_name }}"
+
+  desktop:
+    name: Desktop (Windows) e CLI
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+        working-directory: apps/desktop
+
+      # Instalador NSIS assinado para o updater + latest.json.
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: Arca for Agents ${{ github.ref_name }}
+          releaseBody: |
+            - **Windows:** instale o `Arca for Agents_*_x64-setup.exe`. As próximas versões chegam pelo próprio app.
+            - **Android:** instale o `arca-*.apk` (permita "instalar apps desta fonte"). As próximas versões chegam pelo próprio app.
+            - **CLI:** `arca-cli-windows-x64.exe` (renomeie para `arca.exe` e coloque no PATH), ou `cargo install --path crates/arca-cli`.
+          releaseDraft: true
+          includeUpdaterJson: true
+
+      - name: CLI
+        shell: bash
+        run: |
+          cargo build --release -p arca
+          cp target/release/arca.exe arca-cli-windows-x64.exe
+          gh release upload "${{ github.ref_name }}" arca-cli-windows-x64.exe --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  android:
+    name: Android
+    needs: desktop
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+      - uses: Swatinem/rust-cache@v2
+
+      - name: NDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;28.2.13676358" > /dev/null
+
+      - name: Chave de assinatura
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/arca-release.jks
+          cat > android/key.properties <<EOF
+          storeFile=arca-release.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEYSTORE_PASSWORD
+          EOF
+
+      - run: flutter build apk --release --target-platform android-arm64,android-arm
+
+      - name: Enviar APK
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          cp build/app/outputs/flutter-apk/app-release.apk "arca-$version.apk"
+          gh release upload "$GITHUB_REF_NAME" "arca-$version.apk" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    name: Publicar
+    needs: [desktop, android]
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
