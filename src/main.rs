@@ -1,6 +1,8 @@
-use arca::persistence::Database;
-use clap::{Parser, Subcommand, Args};
-use std::io::{self};
+use arca::persistence::{Authors, Database, Policy, SessionState};
+use arca::{dates, AddOptions, EditOptions, ListOptions, PingOptions, Target};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use colored::Colorize;
+use std::process::ExitCode;
 
 use arca::db_path_solver::get_db_path;
 
@@ -19,10 +21,81 @@ struct EditArgs {
     /// Edit task's title
     #[arg(short, long)]
     title: Option<String>,
-    
+
     /// Edit task's daily
     #[arg(short, long)]
     daily: Option<bool>,
+
+    /// Due date (AAAA-MM-DD, hoje, amanhã, +3d) or "none" to clear
+    #[arg(long)]
+    due: Option<String>,
+
+    /// Project name or "none" to remove from its project
+    #[arg(short, long)]
+    project: Option<String>,
+}
+
+/// Which task: by position (as shown by `list`) or by --id
+#[derive(Args)]
+struct TargetArgs {
+    /// Task position
+    #[arg(required_unless_present = "id", conflicts_with = "id")]
+    position: Option<usize>,
+
+    /// Task id instead of position
+    #[arg(long)]
+    id: Option<i64>,
+
+    /// Count positions inside this project's list (`list --project`)
+    #[arg(short, long)]
+    project: Option<String>,
+}
+
+impl TargetArgs {
+    fn target(&self) -> Target {
+        match (self.id, self.position) {
+            (Some(id), _) => Target::Id(id),
+            (None, Some(position)) => Target::Position(position),
+            (None, None) => unreachable!("clap requires position or --id"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum PolicyArg {
+    /// Agents can only read
+    None,
+    /// Agents manage only the tasks they created
+    Own,
+    /// Agents manage every task of the project
+    All,
+}
+
+impl From<PolicyArg> for Policy {
+    fn from(value: PolicyArg) -> Self {
+        match value {
+            PolicyArg::None => Policy::None,
+            PolicyArg::Own => Policy::Own,
+            PolicyArg::All => Policy::All,
+        }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum StateArg {
+    Working,
+    Waiting,
+    Ended,
+}
+
+impl From<StateArg> for SessionState {
+    fn from(value: StateArg) -> Self {
+        match value {
+            StateArg::Working => SessionState::Working,
+            StateArg::Waiting => SessionState::Waiting,
+            StateArg::Ended => SessionState::Ended,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -40,6 +113,18 @@ enum Commands {
         /// Show ids
         #[arg(long)]
         id: bool,
+
+        /// Only tasks of this project
+        #[arg(short, long)]
+        project: Option<String>,
+
+        /// Also show tasks created by agents
+        #[arg(long, conflicts_with = "only_agents")]
+        agents: bool,
+
+        /// Show only tasks created by agents
+        #[arg(long)]
+        only_agents: bool,
     },
     /// Register a new task
     Add {
@@ -50,18 +135,29 @@ enum Commands {
         /// Is task daily?
         #[arg(short, long)]
         daily: bool,
+
+        /// Put it on the shelf instead of the cart
+        #[arg(short, long)]
+        shelf: bool,
+
+        /// Due date, just for reference (AAAA-MM-DD, hoje, amanhã, +3d)
+        #[arg(long)]
+        due: Option<String>,
+
+        /// Project name
+        #[arg(short, long)]
+        project: Option<String>,
     },
     /// Mark task as done
     Done {
-        /// Task position
-        #[arg(required=true)]
-        position: u8,
+        #[command(flatten)]
+        target: TargetArgs,
     },
     /// Edit task's metadata
     Edit {
         /// Task id to edit
         #[arg(required=true)]
-        id: u32,
+        id: i64,
         /// Task's fields
         #[command(flatten)]
         fields: EditArgs,
@@ -70,48 +166,195 @@ enum Commands {
     Delete {
         /// Task id
         #[arg(required=true)]
-        id: u32,
+        id: i64,
     },
     /// Take task from shelf
     Take {
-        /// Task position in shelf
-        #[arg(required=true)]
-        position_in_shelf: u8,
+        #[command(flatten)]
+        target: TargetArgs,
     },
     /// Put a task back on the shelf
     PutBack {
-        /// Task position in cart
-        #[arg(required=true)]
-        position_in_cart: u8,
+        #[command(flatten)]
+        target: TargetArgs,
     },
-    /// Checks the day and clear the cart
+    /// (Legacy) Archive done tasks now; the day rollover is automatic
     Check,
     /// Check all tasks you've already done
     History,
+    /// Manage projects and their linked folders
+    Project {
+        #[command(subcommand)]
+        action: ProjectCommands,
+    },
+    /// Record agent activity (meant for hooks; reads the hook JSON from stdin, never prints)
+    Ping {
+        /// Session state; if omitted, derived from the hook's `hook_event_name`
+        #[arg(long, value_enum)]
+        state: Option<StateArg>,
+
+        /// Agent name (default: $ARCA_AGENT)
+        #[arg(long)]
+        agent: Option<String>,
+
+        /// Session id (default: `session_id` from stdin)
+        #[arg(long)]
+        session: Option<String>,
+
+        /// Working directory (default: `cwd` from stdin, then the current one)
+        #[arg(long)]
+        cwd: Option<String>,
+    },
+    /// Show agent sessions per project
+    Agents {
+        /// Include sessions that ended more than 24h ago
+        #[arg(long)]
+        all: bool,
+
+        /// Minutes without a signal before "working" becomes "possibly stopped"
+        #[arg(long)]
+        window: Option<i64>,
+    },
+    /// Read or change settings
+    Config {
+        #[command(subcommand)]
+        action: ConfigCommands,
+    },
 }
 
-fn main() -> io::Result<()> {
+#[derive(Subcommand)]
+enum ProjectCommands {
+    /// Create a project
+    Add {
+        name: String,
 
+        /// What agents may do with the project's tasks
+        #[arg(long, value_enum, default_value_t = PolicyArg::Own)]
+        policy: PolicyArg,
+    },
+    /// List projects with folders and task counts
+    List,
+    /// Rename a project
+    Rename { name: String, new_name: String },
+    /// Delete a project (its tasks stay, without project)
+    Delete { name: String },
+    /// Change the agent policy of a project
+    Policy {
+        name: String,
+        #[arg(value_enum)]
+        policy: PolicyArg,
+    },
+    /// Link a folder to a project (default: current folder)
+    Link { name: String, folder: Option<String> },
+    /// Unlink a folder (default: current folder)
+    Unlink { folder: Option<String> },
+    /// Show which project a folder belongs to (default: current folder)
+    Which { folder: Option<String> },
+}
+
+#[derive(Subcommand)]
+enum ConfigCommands {
+    /// Minutes an agent counts as "working" after its last signal (default 10)
+    ActiveWindow { minutes: Option<i64> },
+}
+
+fn main() -> ExitCode {
     let args = Cli::parse();
 
-    let db = Database::init(get_db_path().unwrap()).unwrap();
-    let conn = db.conn();
-
-    conn.pragma_update(None, "journal_mode", "WAL").unwrap();
-    conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-
-    match args.action {
-        Commands::List {shelf, cart, id} => arca::list(db, Some(shelf), Some(cart), Some(id)),
-        Commands::Add {title, daily} => arca::add(db, title, daily),
-        Commands::Done {position} => arca::done(db, position),
-        Commands::Edit {id, fields} => arca::edit(db, id, fields.title.as_deref(), fields.daily),
-        Commands::Delete {id} => arca::delete(db, id),
-        Commands::Take {position_in_shelf} => arca::take(db, position_in_shelf),
-        Commands::PutBack {position_in_cart} => arca::putback(db, position_in_cart),
-        Commands::Check => arca::check(db),
-        Commands::History => arca::history(db),
-        // _ => println!("Are you sure this command exists?")
+    if let Commands::Ping { state, agent, session, cwd } = &args.action {
+        // Roda dentro de hooks: nunca pode falhar o hook nem escrever no stdout.
+        let options = PingOptions {
+            state: state.map(Into::into),
+            agent: agent.as_deref(),
+            session: session.as_deref(),
+            cwd: cwd.as_deref(),
+        };
+        silent_ping(options);
+        return ExitCode::SUCCESS;
     }
 
-    Ok(())
+    match run(args.action) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{} {:#}", "error:".red().bold(), error);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn open_database() -> anyhow::Result<Database> {
+    let db = Database::init(get_db_path()?)?;
+    db.rollover_if_needed(dates::today())?;
+    Ok(db)
+}
+
+fn run(action: Commands) -> anyhow::Result<()> {
+    let db = open_database()?;
+
+    match action {
+        Commands::List {shelf, cart, id, project, agents, only_agents} => {
+            let authors = if only_agents { Authors::Agents } else if agents { Authors::All } else { Authors::User };
+            arca::list(&db, ListOptions { shelf, cart, id, project: project.as_deref(), authors })
+        }
+        Commands::Add {title, daily, shelf, due, project} => arca::add(&db, AddOptions {
+            title: &title, daily, shelf, due: due.as_deref(), project: project.as_deref(),
+        }),
+        Commands::Done {target} => arca::done(&db, target.target(), target.project.as_deref()),
+        Commands::Edit {id, fields} => arca::edit(&db, id, EditOptions {
+            title: fields.title.as_deref(),
+            daily: fields.daily,
+            due: fields.due.as_deref(),
+            project: fields.project.as_deref(),
+        }),
+        Commands::Delete {id} => arca::delete(&db, id),
+        Commands::Take {target} => arca::take(&db, target.target(), target.project.as_deref()),
+        Commands::PutBack {target} => arca::putback(&db, target.target(), target.project.as_deref()),
+        Commands::Check => arca::check(&db),
+        Commands::History => arca::history(&db),
+        Commands::Project {action} => match action {
+            ProjectCommands::Add {name, policy} => arca::project_add(&db, &name, policy.into()),
+            ProjectCommands::List => arca::project_list(&db),
+            ProjectCommands::Rename {name, new_name} => arca::project_rename(&db, &name, &new_name),
+            ProjectCommands::Delete {name} => arca::project_delete(&db, &name),
+            ProjectCommands::Policy {name, policy} => arca::project_policy(&db, &name, policy.into()),
+            ProjectCommands::Link {name, folder} => arca::project_link(&db, &name, folder.as_deref()),
+            ProjectCommands::Unlink {folder} => arca::project_unlink(&db, folder.as_deref()),
+            ProjectCommands::Which {folder} => arca::project_which(&db, folder.as_deref()),
+        },
+        Commands::Agents {all, window} => arca::agents(&db, all, window),
+        Commands::Config {action} => match action {
+            ConfigCommands::ActiveWindow {minutes} => arca::config_active_window(&db, minutes),
+        },
+        Commands::Ping {..} => unreachable!("handled in main"),
+    }
+}
+
+/// Executa o ping engolindo erros e panics; falhas vão para `ping-errors.log` ao lado do banco.
+fn silent_ping(options: PingOptions) {
+    std::panic::set_hook(Box::new(|_| {}));
+    let result = std::panic::catch_unwind(|| -> anyhow::Result<()> {
+        let db = Database::init(get_db_path()?)?;
+        // A virada do dia não pode impedir o registro da sessão.
+        let _ = db.rollover_if_needed(dates::today());
+        arca::ping(&db, options)
+    });
+
+    let message = match result {
+        Ok(Ok(())) => return,
+        Ok(Err(error)) => format!("{error:#}"),
+        Err(_) => "panic".to_string(),
+    };
+    log_ping_error(&message);
+}
+
+fn log_ping_error(message: &str) {
+    use std::io::Write;
+    let Ok(db_path) = get_db_path() else { return };
+    let log_path = db_path.with_file_name("ping-errors.log");
+    // Mantém o arquivo pequeno: recomeça quando passa de 64 KiB.
+    let too_big = std::fs::metadata(&log_path).is_ok_and(|m| m.len() > 64 * 1024);
+    let file = std::fs::OpenOptions::new().create(true).append(!too_big).write(true).truncate(too_big).open(&log_path);
+    if let Ok(mut file) = file {
+        let _ = writeln!(file, "{} {}", dates::now().format(dates::DATETIME_FORMAT), message);
+    }
 }
