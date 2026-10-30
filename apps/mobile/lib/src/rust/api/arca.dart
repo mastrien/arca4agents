@@ -51,6 +51,10 @@ Future<void> editProject({
 Future<void> deleteProject({required PlatformInt64 id}) =>
     RustLib.instance.api.crateApiArcaDeleteProject(id: id);
 
+/// Nome com que o celular aparece no PC ("Pixel 8").
+Future<void> setDeviceName({required String name}) =>
+    RustLib.instance.api.crateApiArcaSetDeviceName(name: name);
+
 /// Pareia com o PC a partir do conteúdo do QR code. Devolve o `Peer` em JSON.
 Future<String> pair({required String code}) =>
     RustLib.instance.api.crateApiArcaPair(code: code);

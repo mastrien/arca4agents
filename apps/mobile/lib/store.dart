@@ -10,12 +10,14 @@ import 'src/rust/api/arca.dart' as arca;
 class ArcaStore extends ChangeNotifier with WidgetsBindingObserver {
   Board? board;
   String? project;
-  String authors = 'user';
+  String authors = 'all';
   String? error;
 
   List<Peer> peers = [];
   bool syncing = false;
   String? lastSyncMessage;
+  /// Resultado da última tentativa: `null` antes da primeira.
+  bool? lastSyncOk;
 
   Timer? _timer;
 
@@ -136,6 +138,7 @@ class ArcaStore extends ChangeNotifier with WidgetsBindingObserver {
       final failed = results.where((r) => r['ok'] != true).toList();
       final now = DateTime.now();
       final time = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+      lastSyncOk = failed.isEmpty;
       if (failed.isEmpty) {
         lastSyncMessage = 'Sincronizado às $time';
       } else {
@@ -143,6 +146,7 @@ class ArcaStore extends ChangeNotifier with WidgetsBindingObserver {
         if (!quiet) error = failed.map((r) => '${r['peer']}: ${r['error']}').join('\n');
       }
     } catch (e) {
+      lastSyncOk = false;
       if (!quiet) error = '$e';
     } finally {
       syncing = false;

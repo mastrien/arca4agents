@@ -8,6 +8,7 @@ import {
   Board,
   HistoryView,
   Policy,
+  projectColor,
   ProjectView,
   SessionView,
   Status,
@@ -18,6 +19,7 @@ import "./App.css";
 
 // O board é relido periodicamente: hooks, MCP, CLI e a sincronização escrevem no mesmo banco.
 const REFRESH_MS = 3000;
+const AUTHORS_KEY = "arca.authors";
 
 type Modal =
   | { kind: "edit"; task: TaskView }
@@ -32,14 +34,17 @@ function errorText(e: unknown): string {
 
 export default function App() {
   const [board, setBoard] = useState<Board | null>(null);
+  const [sync, setSync] = useState<SyncStatus | null>(null);
   const [project, setProject] = useState("");
-  const [authors, setAuthors] = useState<Authors>("user");
+  const [authors, setAuthors] = useState<Authors>(() => (localStorage.getItem(AUTHORS_KEY) as Authors) || "all");
   const [modal, setModal] = useState<Modal>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      setBoard(await api.board({ project: project || undefined, authors }));
+      const [b, s] = await Promise.all([api.board({ project: project || undefined, authors }), api.syncStatus()]);
+      setBoard(b);
+      setSync(s);
     } catch (e) {
       setError(errorText(e));
     }
@@ -50,6 +55,8 @@ export default function App() {
     const timer = setInterval(refresh, REFRESH_MS);
     return () => clearInterval(timer);
   }, [refresh]);
+
+  useEffect(() => localStorage.setItem(AUTHORS_KEY, authors), [authors]);
 
   // Toda ação passa por aqui: mostra o erro e relê o board.
   const run = useCallback(
@@ -69,18 +76,30 @@ export default function App() {
     return <div className="loading">{error ?? "Abrindo o Arca…"}</div>;
   }
 
+  const edit = (task: TaskView) => setModal({ kind: "edit", task });
+
   return (
     <div className="app">
       <header className="topbar">
-        <h1>Arca</h1>
-        <select value={project} onChange={(e) => setProject(e.target.value)} title="Projeto">
-          <option value="">Todos os projetos</option>
+        <div className="brand">
+          <ArcaMark />
+          <span className="wordmark">
+            Arca<span>4agents</span>
+          </span>
+        </div>
+
+        <nav className="chips" aria-label="Filtrar por projeto">
+          <button className={project === "" ? "active" : ""} onClick={() => setProject("")}>
+            Todos
+          </button>
           {board.projects.map((p) => (
-            <option key={p.id} value={p.name}>
+            <button key={p.id} className={project === p.name ? "active" : ""} onClick={() => setProject(p.name)}>
+              <ProjectDot name={p.name} />
               {p.name}
-            </option>
+            </button>
           ))}
-        </select>
+        </nav>
+
         <div className="segmented" role="group" aria-label="Autores">
           {(
             [
@@ -94,32 +113,43 @@ export default function App() {
             </button>
           ))}
         </div>
+
         <div className="spacer" />
-        <button onClick={() => setModal({ kind: "history" })}>Histórico</button>
-        <button onClick={() => setModal({ kind: "projects" })}>Projetos</button>
-        <button onClick={() => setModal({ kind: "sync" })}>Sincronização</button>
+
+        <SyncPill status={sync} onClick={() => setModal({ kind: "sync" })} />
+
+        <div className="icon-buttons">
+          <button className="icon" aria-label="Projetos" title="Projetos" onClick={() => setModal({ kind: "projects" })}>
+            <Icon name="folder" />
+          </button>
+          <button className="icon" aria-label="Histórico" title="Histórico" onClick={() => setModal({ kind: "history" })}>
+            <Icon name="history" />
+          </button>
+        </div>
       </header>
 
       <UpdateBanner />
 
-      {error && (
-        <div className="error" onClick={() => setError(null)} title="Fechar">
-          {error}
+      <main className="content">
+        {error && (
+          <button className="error" onClick={() => setError(null)} title="Fechar">
+            {error}
+          </button>
+        )}
+
+        <AddBar projects={board.projects} defaultProject={project} onAdd={(input) => run(() => api.addTask(input))} />
+
+        <div className="layout">
+          <section className="columns" aria-label="Quadro">
+            <Column kind="shelf" title="Estante" hint="fica pra depois" status="SHELF" tasks={board.shelf} run={run} onEdit={edit} showProject={!project} />
+            <Column kind="cart" title="Carrinho" hint="o que fica por perto" status="CART" tasks={board.cart} run={run} onEdit={edit} showProject={!project} />
+            <Column kind="done" title="Feito hoje" hint="vai pro histórico amanhã" status="DONE" tasks={board.done} run={run} onEdit={edit} showProject={!project} />
+          </section>
+          <aside className="side">
+            <Sessions sessions={board.sessions} windowMinutes={board.window_minutes} />
+            <Suggestions board={board} run={run} />
+          </aside>
         </div>
-      )}
-
-      <AddBar projects={board.projects} defaultProject={project} onAdd={(input) => run(() => api.addTask(input))} />
-
-      <main className="layout">
-        <section className="columns">
-          <Column title="Estante" hint="o que você decidiu não priorizar agora" status="SHELF" tasks={board.shelf} run={run} onEdit={(task) => setModal({ kind: "edit", task })} showProject={!project} />
-          <Column title="Carrinho" hint="o que você quer manter por perto" status="CART" tasks={board.cart} run={run} onEdit={(task) => setModal({ kind: "edit", task })} showProject={!project} />
-          <Column title="Feito hoje" hint="vai para o histórico na virada do dia" status="DONE" tasks={board.done} run={run} onEdit={(task) => setModal({ kind: "edit", task })} showProject={!project} />
-        </section>
-        <aside className="side">
-          <Sessions sessions={board.sessions} />
-          <Suggestions board={board} run={run} />
-        </aside>
       </main>
 
       {modal?.kind === "edit" && <EditTask task={modal.task} projects={board.projects} onClose={() => setModal(null)} run={run} />}
@@ -127,6 +157,105 @@ export default function App() {
       {modal?.kind === "sync" && <Sync onClose={() => setModal(null)} />}
       {modal?.kind === "history" && <History onClose={() => setModal(null)} />}
     </div>
+  );
+}
+
+// ---------- Peças pequenas ----------
+
+function ArcaMark() {
+  return (
+    <svg className="mark" width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 10h20v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      <path d="M3 10l3-6h14l3 6" />
+      <path d="M10 15h6" />
+    </svg>
+  );
+}
+
+const ICONS: Record<string, React.ReactNode> = {
+  folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
+  history: (
+    <>
+      <path d="M3 12a9 9 0 1 0 3-6.7" />
+      <path d="M3 4v4h4" />
+      <path d="M12 8v4l3 2" />
+    </>
+  ),
+  close: <path d="M6 6l12 12M18 6L6 18" />,
+  check: <path d="M5 12l5 5L20 7" />,
+  repeat: (
+    <>
+      <path d="M20 12a8 8 0 1 1-2.3-5.7" />
+      <path d="M20 4v5h-5" />
+    </>
+  ),
+  bot: (
+    <>
+      <rect x="5" y="8" width="14" height="11" rx="3" />
+      <path d="M12 4v4M9 13h.01M15 13h.01" />
+    </>
+  ),
+  phone: (
+    <>
+      <rect x="7" y="2" width="10" height="20" rx="2" />
+      <path d="M11 18h2" />
+    </>
+  ),
+};
+
+function Icon({ name, size = 18 }: { name: keyof typeof ICONS; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {ICONS[name]}
+    </svg>
+  );
+}
+
+function ProjectDot({ name }: { name: string }) {
+  return <span className="project-dot" style={{ background: projectColor(name) }} />;
+}
+
+function ProjectTag({ name }: { name: string }) {
+  return (
+    <span className="meta-project">
+      <ProjectDot name={name} />
+      {name}
+    </span>
+  );
+}
+
+function AgentChip({ agent }: { agent: string }) {
+  return (
+    <span className="agent-chip" title={`Criada por ${agent}`}>
+      <Icon name="bot" size={11} />
+      {agent}
+    </span>
+  );
+}
+
+function SyncPill({ status, onClick }: { status: SyncStatus | null; onClick: () => void }) {
+  if (!status) return null;
+  const last = status.clients[0];
+  let tone = "ok";
+  let label = "Sincronizado";
+  let detail = last ? `${last.name} · ${last.last_seen_label}` : "aguardando o celular";
+  if (status.error) {
+    tone = "warn";
+    label = "Sincronização parou";
+    detail = "abrir detalhes";
+  } else if (!status.running) {
+    tone = "off";
+    label = "Sincronização desligada";
+    detail = "";
+  } else if (!last) {
+    label = "Sincronização ligada";
+  }
+  return (
+    <button className={`sync-pill ${tone}`} onClick={onClick}>
+      <span className="dot" />
+      <strong>{label}</strong>
+      {detail && <span className="muted">{detail}</span>}
+    </button>
   );
 }
 
@@ -176,7 +305,7 @@ function UpdateBanner() {
       {progress ? (
         <span className="muted">{progress}</span>
       ) : (
-        <button className="primary" onClick={install}>
+        <button className="primary small" onClick={install}>
           Atualizar e reiniciar
         </button>
       )}
@@ -191,12 +320,10 @@ function AddBar({ projects, defaultProject, onAdd }: { projects: ProjectView[]; 
   const [due, setDue] = useState("");
   const [project, setProject] = useState(defaultProject);
   const [daily, setDaily] = useState(false);
-  const [status, setStatus] = useState<Status>("CART");
 
   useEffect(() => setProject(defaultProject), [defaultProject]);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  async function add(status: Status) {
     if (!title.trim()) return;
     await onAdd({ title, due: due || undefined, project: project || undefined, daily, status });
     setTitle("");
@@ -205,27 +332,58 @@ function AddBar({ projects, defaultProject, onAdd }: { projects: ProjectView[]; 
   }
 
   return (
-    <form className="addbar" onSubmit={submit}>
-      <input className="grow" placeholder="Nova tarefa…" value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
-      <input className="due" placeholder="prazo: +3d, amanhã, 2026-11-05" value={due} onChange={(e) => setDue(e.target.value)} />
-      <select value={project} onChange={(e) => setProject(e.target.value)}>
-        <option value="">sem projeto</option>
-        {projects.map((p) => (
-          <option key={p.id} value={p.name}>
-            {p.name}
-          </option>
-        ))}
-      </select>
-      <select value={status} onChange={(e) => setStatus(e.target.value as Status)}>
-        <option value="CART">no carrinho</option>
-        <option value="SHELF">na estante</option>
-      </select>
-      <label className="check">
-        <input type="checkbox" checked={daily} onChange={(e) => setDaily(e.target.checked)} /> diária
+    <form
+      className="addbar"
+      onSubmit={(e) => {
+        e.preventDefault();
+        add("CART");
+      }}
+    >
+      <label htmlFor="nova" className="addbar-label">
+        Nova tarefa
       </label>
-      <button type="submit" className="primary">
-        Adicionar
-      </button>
+      <input
+        id="nova"
+        className="addbar-title"
+        placeholder="O que vai para o carrinho?"
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && e.shiftKey) {
+            e.preventDefault();
+            add("SHELF");
+          }
+        }}
+        title="Enter: carrinho · Shift+Enter: estante"
+        autoFocus
+      />
+      <div className="addbar-options">
+        <label className="field">
+          Prazo
+          <input className="mono" placeholder="+3d" value={due} onChange={(e) => setDue(e.target.value)} title="AAAA-MM-DD, hoje, amanhã, +3d, +2w" />
+        </label>
+        <label className="field select">
+          {project && <ProjectDot name={project} />}
+          <select value={project} onChange={(e) => setProject(e.target.value)} aria-label="Projeto">
+            <option value="">sem projeto</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.name}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <input type="checkbox" checked={daily} onChange={(e) => setDaily(e.target.checked)} />
+          diária
+        </label>
+        <button type="button" onClick={() => add("SHELF")}>
+          Na estante
+        </button>
+        <button type="submit" className="primary">
+          Adicionar ao carrinho
+        </button>
+      </div>
     </form>
   );
 }
@@ -234,11 +392,11 @@ function AddBar({ projects, defaultProject, onAdd }: { projects: ProjectView[]; 
 
 type Run = (action: () => Promise<unknown>) => Promise<void>;
 
-function Column({ title, hint, status, tasks, run, onEdit, showProject }: { title: string; hint: string; status: Status; tasks: TaskView[]; run: Run; onEdit: (task: TaskView) => void; showProject: boolean }) {
+function Column({ kind, title, hint, status, tasks, run, onEdit, showProject }: { kind: string; title: string; hint: string; status: Status; tasks: TaskView[]; run: Run; onEdit: (task: TaskView) => void; showProject: boolean }) {
   const [over, setOver] = useState(false);
   return (
     <div
-      className={`column ${over ? "over" : ""}`}
+      className={`column ${kind} ${over ? "over" : ""}`}
       onDragOver={(e) => {
         e.preventDefault();
         setOver(true);
@@ -253,75 +411,112 @@ function Column({ title, hint, status, tasks, run, onEdit, showProject }: { titl
       }}
     >
       <div className="column-head">
-        <h2>
-          {title} <span className="count">{tasks.length}</span>
-        </h2>
-        <p>{hint}</p>
+        <h2>{title}</h2>
+        <span className="count">{tasks.length}</span>
+        <span className="hint">{hint}</span>
       </div>
-      <div className="cards">
-        {tasks.length === 0 && <div className="empty">vazio</div>}
-        {tasks.map((task) => (
-          <Card key={task.id} task={task} run={run} onEdit={onEdit} showProject={showProject} />
-        ))}
-      </div>
+      {tasks.length === 0 && <div className="empty">vazio</div>}
+      {tasks.map((task, i) =>
+        status === "DONE" ? (
+          <DoneRow key={task.id} task={task} run={run} showProject={showProject} />
+        ) : (
+          <Card key={task.id} task={task} position={status === "CART" ? i : null} run={run} onEdit={onEdit} showProject={showProject} />
+        ),
+      )}
     </div>
   );
 }
 
-function Card({ task, run, onEdit, showProject }: { task: TaskView; run: Run; onEdit: (task: TaskView) => void; showProject: boolean }) {
+function dragProps(task: TaskView) {
+  return {
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => {
+      e.dataTransfer.setData("text/arca-task", String(task.id));
+      e.dataTransfer.setData("text/arca-status", task.status);
+    },
+  };
+}
+
+function Card({ task, position, run, onEdit, showProject }: { task: TaskView; position: number | null; run: Run; onEdit: (task: TaskView) => void; showProject: boolean }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const done = task.status === "DONE";
+  const working = task.working_agents.length > 0;
 
   return (
-    <article
-      className={`card ${done ? "done" : ""} ${task.agent ? "by-agent" : ""}`}
-      draggable
-      onDragStart={(e) => {
-        e.dataTransfer.setData("text/arca-task", String(task.id));
-        e.dataTransfer.setData("text/arca-status", task.status);
-      }}
-      onDoubleClick={() => onEdit(task)}
-    >
-      <div className="card-title">{task.title}</div>
-      <div className="tags">
-        {task.daily && <span className="tag daily">diária</span>}
-        {task.due_label && <span className={`tag due ${task.due_state}`}>{task.due_label}</span>}
-        {showProject && task.project && <span className="tag project">@{task.project}</span>}
-        {task.agent && <span className="tag agent">{task.agent}</span>}
-        {task.working_agents.map((a) => (
-          <span key={a} className="tag working">
-            ⚙ {a}
-          </span>
-        ))}
+    <article className={`card ${working ? "working" : ""}`} {...dragProps(task)} onDoubleClick={() => onEdit(task)}>
+      <div className="card-title">
+        {position !== null && <span className="position">{position}</span>}
+        <span>{task.title}</span>
       </div>
-      <div className="actions">
-        {task.status === "SHELF" && <button onClick={() => run(() => api.moveTask(task.id, "CART"))} title="Pegar para o carrinho">→ carrinho</button>}
-        {task.status === "CART" && <button onClick={() => run(() => api.moveTask(task.id, "SHELF"))} title="Devolver à estante">← estante</button>}
-        {!done ? (
-          <button onClick={() => run(() => api.moveTask(task.id, "DONE"))}>✓ feita</button>
-        ) : (
-          <button onClick={() => run(() => api.moveTask(task.id, "CART"))}>reabrir</button>
+      <div className="meta">
+        {showProject && task.project && <ProjectTag name={task.project} />}
+        {task.daily && (
+          <span className="meta-daily">
+            <Icon name="repeat" size={12} />
+            diária
+          </span>
         )}
-        <button onClick={() => onEdit(task)}>editar</button>
+        {task.due_label && <span className={`due ${task.due_state ?? ""}`}>{task.due_label}</span>}
+        {task.agent && <AgentChip agent={task.agent} />}
+        <span className="mono id">#{task.id}</span>
+      </div>
+      {working && (
+        <div className="working-strip">
+          <span className="dot" />
+          <span>
+            <strong>{task.working_agents.join(", ")}</strong> trabalhando nisto
+          </span>
+        </div>
+      )}
+      <div className="actions">
+        {task.status === "SHELF" && <button onClick={() => run(() => api.moveTask(task.id, "CART"))}>→ carrinho</button>}
+        {task.status === "CART" && <button onClick={() => run(() => api.moveTask(task.id, "SHELF"))}>← estante</button>}
+        <button className="primary" onClick={() => run(() => api.moveTask(task.id, "DONE"))}>
+          Concluir
+        </button>
+        <button onClick={() => onEdit(task)}>Editar</button>
         {confirmDelete ? (
           <button className="danger" onClick={() => run(() => api.deleteTask(task.id))} onMouseLeave={() => setConfirmDelete(false)}>
-            apagar?
+            Apagar?
           </button>
         ) : (
-          <button onClick={() => setConfirmDelete(true)}>apagar</button>
+          <button onClick={() => setConfirmDelete(true)}>Apagar</button>
         )}
       </div>
     </article>
   );
 }
 
+function DoneRow({ task, run, showProject }: { task: TaskView; run: Run; showProject: boolean }) {
+  const details = [
+    showProject ? task.project : null,
+    task.daily ? "diária · volta amanhã" : null,
+    task.agent ? `por ${task.agent}` : null,
+    task.done_time,
+  ].filter(Boolean);
+  return (
+    <article className="done-row" {...dragProps(task)}>
+      <span className="check">
+        <Icon name="check" size={16} />
+      </span>
+      <div className="done-text">
+        <span>{task.title}</span>
+        {details.length > 0 && <span className="muted small">{details.join(" · ")}</span>}
+      </div>
+      <button className="reopen" onClick={() => run(() => api.moveTask(task.id, "CART"))} title="Voltar ao carrinho">
+        reabrir
+      </button>
+    </article>
+  );
+}
+
 // ---------- Painel lateral ----------
 
-function Sessions({ sessions }: { sessions: SessionView[] }) {
+function Sessions({ sessions, windowMinutes }: { sessions: SessionView[]; windowMinutes: number }) {
+  const waiting = sessions.filter((s) => s.activity === "waiting");
   const groups = useMemo(() => {
     const map = new Map<string, SessionView[]>();
     for (const s of sessions) {
-      const key = s.project ?? "(sem projeto)";
+      const key = s.project ?? "";
       map.set(key, [...(map.get(key) ?? []), s]);
     }
     return [...map.entries()];
@@ -329,26 +524,48 @@ function Sessions({ sessions }: { sessions: SessionView[] }) {
 
   return (
     <section className="panel">
-      <h3>Agentes</h3>
+      <div className="panel-head">
+        <h2>Agentes</h2>
+        <span className="hint">janela de {windowMinutes} min</span>
+      </div>
+
+      {waiting.map((s) => (
+        <div key={s.session_id} className="attention">
+          <span className="dot" />
+          <div>
+            <div>
+              <strong>{s.agent}</strong> está esperando você
+            </div>
+            <div className="small">
+              {s.project ?? "sem projeto"} · {s.last_seen_label}
+            </div>
+          </div>
+        </div>
+      ))}
+
       {groups.length === 0 && <p className="muted">Nenhuma sessão recente.</p>}
       {groups.map(([name, list]) => (
         <div key={name} className="session-group">
-          <div className="session-project">{name}</div>
+          <div className="session-project">
+            {name ? (
+              <>
+                <ProjectDot name={name} />
+                {name}
+              </>
+            ) : (
+              "sem projeto"
+            )}
+          </div>
           {list.map((s) => (
             <div key={s.session_id} className={`session ${s.activity}`}>
               <span className="dot" />
-              <div>
+              <div className="session-text">
                 <div>
-                  <strong>{s.agent}</strong> {s.activity_label}
+                  <strong>{s.agent}</strong> <span className="state">{s.activity_label}</span>
                 </div>
                 <div className="muted small">
-                  última atividade {s.last_seen_label}
-                  {s.task_title && (
-                    <>
-                      {" · em "}
-                      <em>{s.task_title}</em>
-                    </>
-                  )}
+                  {s.task_id && s.task_title ? `em #${s.task_id} ${s.task_title} · ` : ""}
+                  {s.activity === "possibly_stopped" ? `último sinal ${s.last_seen_label}` : s.last_seen_label}
                 </div>
               </div>
             </div>
@@ -362,17 +579,18 @@ function Sessions({ sessions }: { sessions: SessionView[] }) {
 function Suggestions({ board, run }: { board: Board; run: Run }) {
   return (
     <section className="panel">
-      <h3>
-        Sugestões <span className="count">{board.suggestions.length}</span>
-      </h3>
+      <div className="panel-head">
+        <h2>Sugestões</h2>
+        <span className="count">{board.suggestions.length}</span>
+      </div>
       {board.suggestions.length === 0 && <p className="muted">Nada esperando você.</p>}
       {board.suggestions.map((s) => (
         <div key={s.id} className="suggestion">
           <div>
-            <strong>{s.agent}</strong> propõe <strong>{s.summary}</strong> em <em>{s.task_title}</em>
+            <strong>{s.agent}</strong> propõe <strong>{s.summary}</strong> #{s.task_id} {s.task_title}
           </div>
-          {s.reason && <div className="muted small">“{s.reason}”</div>}
-          <div className="actions">
+          {s.reason && <div className="reason">“{s.reason}”</div>}
+          <div className="actions always">
             <button className="primary" onClick={() => run(() => api.approve(s.id))}>
               Aprovar
             </button>
@@ -387,7 +605,7 @@ function Suggestions({ board, run }: { board: Board; run: Run }) {
 
 // ---------- Janelas ----------
 
-function Dialog({ title, onClose, children, wide }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
+function Dialog({ title, subtitle, onClose, children, wide }: { title: string; subtitle?: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
@@ -395,15 +613,16 @@ function Dialog({ title, onClose, children, wide }: { title: string; onClose: ()
   }, [onClose]);
   return (
     <div className="backdrop" onMouseDown={onClose}>
-      <div className={`dialog ${wide ? "wide" : ""}`} onMouseDown={(e) => e.stopPropagation()}>
+      <section role="dialog" aria-label={title} className={`dialog ${wide ? "wide" : ""}`} onMouseDown={(e) => e.stopPropagation()}>
         <div className="dialog-head">
           <h2>{title}</h2>
-          <button onClick={onClose} aria-label="Fechar">
-            ✕
+          {subtitle && <span className="muted">{subtitle}</span>}
+          <button className="icon" onClick={onClose} aria-label="Fechar">
+            <Icon name="close" />
           </button>
         </div>
-        {children}
-      </div>
+        <div className="dialog-body">{children}</div>
+      </section>
     </div>
   );
 }
@@ -421,15 +640,15 @@ function EditTask({ task, projects, onClose, run }: { task: TaskView; projects: 
   }
 
   return (
-    <Dialog title={`Tarefa #${task.id}`} onClose={onClose}>
+    <Dialog title={`Tarefa #${task.id}`} subtitle={task.agent ? `criada por ${task.agent}` : undefined} onClose={onClose}>
       <form className="form" onSubmit={save}>
         <label>
           Título
           <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
         </label>
         <label>
-          Prazo (vazio para remover)
-          <input value={due} onChange={(e) => setDue(e.target.value)} placeholder="2026-11-05, +3d, amanhã" />
+          Prazo <span className="muted">· só referência; vazio para remover</span>
+          <input className="mono" value={due} onChange={(e) => setDue(e.target.value)} placeholder="2026-11-05, +3d, amanhã" />
         </label>
         <label>
           Projeto
@@ -442,10 +661,9 @@ function EditTask({ task, projects, onClose, run }: { task: TaskView; projects: 
             ))}
           </select>
         </label>
-        <label className="check">
-          <input type="checkbox" checked={daily} onChange={(e) => setDaily(e.target.checked)} /> diária
+        <label className="inline">
+          <input type="checkbox" checked={daily} onChange={(e) => setDaily(e.target.checked)} /> Diária: volta ao carrinho todo dia depois de feita
         </label>
-        {task.agent && <p className="muted small">Criada por {task.agent}.</p>}
         <div className="dialog-actions">
           <button type="button" onClick={onClose}>
             Cancelar
@@ -480,12 +698,13 @@ function Projects({ projects, onClose, run }: { projects: ProjectView[]; onClose
         className="row"
         onSubmit={async (e) => {
           e.preventDefault();
+          if (!name.trim()) return;
           await run(() => api.addProject(name, policy));
           setName("");
         }}
       >
-        <input className="grow" placeholder="Novo projeto" value={name} onChange={(e) => setName(e.target.value)} />
-        <select value={policy} onChange={(e) => setPolicy(e.target.value as Policy)}>
+        <input className="grow" placeholder="Novo projeto" value={name} onChange={(e) => setName(e.target.value)} aria-label="Nome do novo projeto" />
+        <select value={policy} onChange={(e) => setPolicy(e.target.value as Policy)} aria-label="Política de agentes">
           {(Object.keys(POLICY_LABEL) as Policy[]).map((p) => (
             <option key={p} value={p}>
               {POLICY_LABEL[p]}
@@ -513,8 +732,9 @@ function ProjectRow({ project, run, onChooseFolder }: { project: ProjectView; ru
   return (
     <div className="project">
       <div className="row">
-        <input className="grow" value={name} onChange={(e) => setName(e.target.value)} onBlur={() => name !== project.name && run(() => api.editProject(project.id, { name }))} />
-        <select value={project.policy} onChange={(e) => run(() => api.editProject(project.id, { policy: e.target.value as Policy }))}>
+        <ProjectDot name={project.name} />
+        <input className="grow" value={name} onChange={(e) => setName(e.target.value)} onBlur={() => name !== project.name && run(() => api.editProject(project.id, { name }))} aria-label="Nome do projeto" />
+        <select value={project.policy} onChange={(e) => run(() => api.editProject(project.id, { policy: e.target.value as Policy }))} aria-label="Política de agentes">
           {(Object.keys(POLICY_LABEL) as Policy[]).map((p) => (
             <option key={p} value={p}>
               {POLICY_LABEL[p]}
@@ -522,19 +742,20 @@ function ProjectRow({ project, run, onChooseFolder }: { project: ProjectView; ru
           ))}
         </select>
         <input
-          className="minutes"
-          placeholder="janela global"
-          title='Minutos de "ativo agora" (vazio = janela global)'
+          className="minutes mono"
+          placeholder="global"
+          title='Minutos de "trabalhando" (vazio = janela global)'
+          aria-label="Janela de atividade em minutos"
           value={windowMinutes}
           onChange={(e) => setWindowMinutes(e.target.value.replace(/\D/g, ""))}
           onBlur={() => run(() => api.editProject(project.id, { active_window: Number(windowMinutes || 0) }))}
         />
         {confirmDelete ? (
           <button className="danger" onClick={() => run(() => api.deleteProject(project.id))} onMouseLeave={() => setConfirmDelete(false)}>
-            apagar? (as tarefas ficam)
+            Apagar? (as tarefas ficam)
           </button>
         ) : (
-          <button onClick={() => setConfirmDelete(true)}>apagar</button>
+          <button onClick={() => setConfirmDelete(true)}>Apagar</button>
         )}
       </div>
       <div className="muted small">
@@ -542,14 +763,16 @@ function ProjectRow({ project, run, onChooseFolder }: { project: ProjectView; ru
       </div>
       <div className="folders">
         {project.folders.map((f) => (
-          <span key={f} className="folder">
+          <span key={f} className="folder mono">
             {f}
-            <button onClick={() => run(() => api.unlinkFolder(f))} title="Desvincular">
-              ✕
+            <button className="icon tiny" onClick={() => run(() => api.unlinkFolder(f))} aria-label={`Desvincular ${f}`}>
+              <Icon name="close" size={12} />
             </button>
           </span>
         ))}
-        <button onClick={onChooseFolder}>+ pasta</button>
+        <button className="small" onClick={onChooseFolder}>
+          + pasta
+        </button>
       </div>
     </div>
   );
@@ -558,6 +781,7 @@ function ProjectRow({ project, run, onChooseFolder }: { project: ProjectView; ru
 function Sync({ onClose }: { onClose: () => void }) {
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [pairing, setPairing] = useState<{ svg: string; code: string } | null>(null);
+  const [confirmRotate, setConfirmRotate] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -579,45 +803,98 @@ function Sync({ onClose }: { onClose: () => void }) {
   if (!status) return null;
 
   return (
-    <Dialog title="Sincronização na rede de casa" onClose={onClose} wide>
+    <Dialog title="Sincronização" subtitle="só na rede de casa" onClose={onClose} wide>
       {error && <div className="error">{error}</div>}
       {status.error && <div className="error">O servidor parou: {status.error}</div>}
-      <label className="check">
+
+      <label className="toggle-row">
+        <span className="toggle-text">
+          <strong>Este PC recebe sincronizações</strong>
+          <span className="muted">
+            Escutando na porta <span className="mono">{status.port}</span> · o celular sincroniza ao abrir e a cada minuto
+          </span>
+        </span>
         <input
           type="checkbox"
+          className="switch"
           checked={status.running}
           onChange={async (e) => {
             await api.setSyncEnabled(e.target.checked);
             load();
           }}
-        />{" "}
-        Servidor ligado (porta {status.port}) em <strong>{status.name}</strong>
+        />
       </label>
 
       {pairing && (
         <div className="pairing">
-          <div className="qr" dangerouslySetInnerHTML={{ __html: pairing.svg }} />
-          <div>
-            <p>No app do celular, leia este QR code para parear. Os dois aparelhos precisam estar na mesma rede.</p>
-            <p className="muted small">Endereços: {status.urls.join(", ") || "nenhum encontrado"}</p>
+          <div className="qr" role="img" aria-label="QR code de pareamento" dangerouslySetInnerHTML={{ __html: pairing.svg }} />
+          <div className="pairing-text">
+            <h3>Parear o celular</h3>
+            <ol>
+              <li>
+                No celular, abra o Arca › Mais › <strong>Ler QR code do PC</strong>.
+              </li>
+              <li>Os dois aparelhos precisam estar no mesmo Wi-Fi.</li>
+              <li>Depois disso, sincroniza sozinho.</li>
+            </ol>
+            <div className="addresses">
+              <span className="label">Endereços deste PC</span>
+              <div>
+                {status.urls.length === 0 && <span className="muted">nenhum encontrado</span>}
+                {status.urls.map((u) => (
+                  <span key={u} className="address mono">
+                    {u.replace(/^https?:\/\//, "")}
+                  </span>
+                ))}
+              </div>
+            </div>
             <details>
-              <summary>Código em texto (para `arca sync pair` em outro PC)</summary>
-              <textarea readOnly value={pairing.code} rows={4} onFocus={(e) => e.target.select()} />
+              <summary>
+                Código em texto, para <span className="mono">arca sync pair</span> em outro PC
+              </summary>
+              <textarea className="mono" readOnly value={pairing.code} rows={4} onFocus={(e) => e.target.select()} />
             </details>
-            <button
-              onClick={async () => {
-                await api.rotateToken();
-                load();
-              }}
-            >
-              Trocar token (desfaz os pareamentos)
-            </button>
           </div>
         </div>
       )}
 
-      <h3>Atividade</h3>
-      <div className="log">{status.log.length === 0 ? <span className="muted">Nada ainda.</span> : [...status.log].reverse().map((l, i) => <div key={i}>{l}</div>)}</div>
+      <h3>Aparelhos que sincronizaram</h3>
+      {status.clients.length === 0 && <p className="muted">Nenhum desde que o app abriu.</p>}
+      {status.clients.map((c) => (
+        <div key={c.name} className="client">
+          <Icon name="phone" size={20} />
+          <div className="client-text">
+            <span>{c.name}</span>
+            <span className="muted small">última sincronização {c.last_seen_label}</span>
+          </div>
+        </div>
+      ))}
+
+      <details className="log-details">
+        <summary>Atividade</summary>
+        <div className="log mono">{status.log.length === 0 ? <span className="muted">Nada ainda.</span> : [...status.log].reverse().map((l, i) => <div key={i}>{l}</div>)}</div>
+      </details>
+
+      <div className="danger-zone">
+        <span className="muted">Perdeu o celular? Um novo token desfaz todos os pareamentos.</span>
+        {confirmRotate ? (
+          <button
+            className="danger"
+            onClick={async () => {
+              await api.rotateToken();
+              setConfirmRotate(false);
+              load();
+            }}
+            onMouseLeave={() => setConfirmRotate(false)}
+          >
+            Confirmar novo token
+          </button>
+        ) : (
+          <button className="warn" onClick={() => setConfirmRotate(true)}>
+            Gerar novo token
+          </button>
+        )}
+      </div>
     </Dialog>
   );
 }
@@ -634,12 +911,12 @@ function History({ onClose }: { onClose: () => void }) {
       <div className="history">
         {entries?.map((h) => (
           <div key={h.id} className="history-row">
-            <span className="muted small">{h.date}</span>
+            <span className="mono muted small">{h.date}</span>
             <span>{h.title}</span>
-            <span className="tags">
-              {h.daily && <span className="tag daily">diária</span>}
-              {h.project && <span className="tag project">@{h.project}</span>}
-              {h.agent && <span className="tag agent">{h.agent}</span>}
+            <span className="meta">
+              {h.project && <ProjectTag name={h.project} />}
+              {h.daily && <span className="meta-daily">diária</span>}
+              {h.agent && <AgentChip agent={h.agent} />}
             </span>
           </div>
         ))}

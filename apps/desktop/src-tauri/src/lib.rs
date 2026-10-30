@@ -2,6 +2,7 @@
 //! que roda numa thread com conexão própria enquanto o app está aberto.
 //! O banco é o mesmo da CLI, então hooks, MCP e app enxergam as mesmas tarefas.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -20,11 +21,20 @@ struct SyncServer {
   port: u16,
 }
 
+/// Último contato de cada aparelho que sincronizou desde que o app abriu.
+struct Client {
+  name: String,
+  last_seen: chrono::NaiveDateTime,
+}
+
+type Clients = Arc<Mutex<HashMap<String, Client>>>;
+
 struct AppState {
   db_path: PathBuf,
   db: Mutex<Database>,
   server: Mutex<Option<SyncServer>>,
   log: Arc<Mutex<Vec<String>>>,
+  clients: Clients,
   last_error: Arc<Mutex<Option<String>>>,
 }
 
@@ -53,29 +63,49 @@ impl AppState {
     if slot.is_some() {
       return Ok(());
     }
-    let db = Database::init(&self.db_path).map_err(err)?;
+    let db_path = self.db_path.clone();
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = Arc::clone(&stop);
     let log = Arc::clone(&self.log);
+    let clients = Arc::clone(&self.clients);
     let last_error = Arc::clone(&self.last_error);
     if let Ok(mut e) = last_error.lock() {
       *e = None;
     }
 
-    std::thread::spawn(move || {
+    // A porta pode estar ocupada (ex.: um `arca serve` aberto): tenta de novo a cada 5 s até
+    // conseguir ou até a sincronização ser desligada.
+    std::thread::spawn(move || loop {
       let now = || arca_core::dates::now().format("%H:%M:%S").to_string();
-      let result = server::serve(db, "0.0.0.0", port, thread_stop, |event| {
+      if std::net::TcpListener::bind(("0.0.0.0", port)).is_ok()
+        && let Ok(mut e) = last_error.lock() {
+          *e = None;
+        }
+      let result = Database::init(&db_path).and_then(|db| server::serve(db, "0.0.0.0", port, Arc::clone(&thread_stop), |event| {
+        let seen = |client: &str, name: Option<String>| {
+          let name = name.unwrap_or_else(|| client.chars().take(8).collect());
+          if let Ok(mut clients) = clients.lock() {
+            clients.insert(client.to_string(), Client { name: name.clone(), last_seen: arca_core::dates::now() });
+          }
+          name
+        };
         let line = match event {
-          server::Event::Pushed { client, report } => format!("{} recebidas de {}: {} aplicadas", now(), &client[..client.len().min(8)], report.applied),
-          server::Event::Pulled { client, rows } => format!("{} {rows} enviadas para {}", now(), &client[..client.len().min(8)]),
+          server::Event::Pushed { client, name, report } => format!("{} recebidas de {}: {} aplicadas", now(), seen(&client, name), report.applied),
+          server::Event::Pulled { client, name, rows } => format!("{} {rows} enviadas para {}", now(), seen(&client, name)),
           server::Event::Rejected { reason } => format!("{} recusada: {reason}", now()),
         };
         AppState::push_log(&log, line);
-      });
+      }));
       if let Err(error) = result
         && let Ok(mut e) = last_error.lock() {
           *e = Some(format!("{error:#}"));
         }
+      for _ in 0..50 {
+        if thread_stop.load(Ordering::Relaxed) {
+          return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+      }
     });
 
     *slot = Some(SyncServer { stop, port });
@@ -169,7 +199,16 @@ struct SyncStatus {
   device: String,
   urls: Vec<String>,
   log: Vec<String>,
+  /// Aparelhos que sincronizaram, o mais recente primeiro.
+  clients: Vec<ClientView>,
   error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ClientView {
+  name: String,
+  /// "há 2 min".
+  last_seen_label: String,
 }
 
 #[tauri::command]
@@ -183,6 +222,15 @@ fn sync_status(state: State<AppState>) -> CmdResult<SyncStatus> {
     device: state.with_db(|db| Ok(db.device_id()))?,
     urls: server::lan_urls(port),
     log: state.log.lock().map(|l| l.clone()).unwrap_or_default(),
+    clients: {
+      let now = arca_core::dates::now();
+      let clients = state.clients.lock().map_err(err)?;
+      let mut list: Vec<&Client> = clients.values().collect();
+      list.sort_by_key(|c| std::cmp::Reverse(c.last_seen));
+      list.into_iter()
+        .map(|c| ClientView { name: c.name.clone(), last_seen_label: arca_core::dates::humanize_ago(c.last_seen, now) })
+        .collect()
+    },
     error: state.last_error.lock().ok().and_then(|e| e.clone()),
   })
 }
@@ -229,6 +277,7 @@ pub fn run() {
     db: Mutex::new(db),
     server: Mutex::new(None),
     log: Arc::new(Mutex::new(Vec::new())),
+    clients: Arc::new(Mutex::new(HashMap::new())),
     last_error: Arc::new(Mutex::new(None)),
   };
   if sync_enabled {

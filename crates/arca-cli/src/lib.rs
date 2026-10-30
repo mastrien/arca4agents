@@ -453,9 +453,9 @@ pub fn serve(db: Database, bind: &str, port: u16, show_qr: bool) -> Result<()> {
   server::serve(db, bind, port, stop, |event| {
     let time = dates::now().format("%H:%M:%S").to_string().dimmed();
     match event {
-      Event::Pushed { client, report } => println!("{time} {} recebidas de {} ({} aplicadas, {} ignoradas, {} apagadas)",
-        "↓".green(), short_device(&client), report.applied, report.skipped, report.deleted),
-      Event::Pulled { client, rows } => println!("{time} {} {rows} linha(s) enviadas para {}", "↑".cyan(), short_device(&client)),
+      Event::Pushed { client, name, report } => println!("{time} {} recebidas de {} ({} aplicadas, {} ignoradas, {} apagadas)",
+        "↓".green(), name.unwrap_or_else(|| short_device(&client)), report.applied, report.skipped, report.deleted),
+      Event::Pulled { client, name, rows } => println!("{time} {} {rows} linha(s) enviadas para {}", "↑".cyan(), name.unwrap_or_else(|| short_device(&client))),
       Event::Rejected { reason } => println!("{time} {} {reason}", "✗".red()),
     }
   })

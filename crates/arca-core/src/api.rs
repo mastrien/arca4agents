@@ -39,6 +39,8 @@ pub struct TaskView {
   pub agent: Option<String>,
   /// Agentes com sessão aberta trabalhando nesta tarefa agora.
   pub working_agents: Vec<String>,
+  /// Hora da conclusão ("21:40"), só nas concluídas.
+  pub done_time: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -101,6 +103,8 @@ pub struct Board {
   pub sessions: Vec<SessionView>,
   pub suggestions: Vec<SuggestionView>,
   pub projects: Vec<ProjectView>,
+  /// Minutos até "trabalhando" virar "possivelmente parada" (janela global).
+  pub window_minutes: i64,
 }
 
 /// Filtro do board: projeto (por nome) e quais autores mostrar.
@@ -136,6 +140,7 @@ fn task_view(task: &Task, today: NaiveDate, sessions: &[Session]) -> TaskView {
       .filter(|s| s.task_id == Some(task.id) && s.state != crate::persistence::SessionState::Ended)
       .map(|s| s.agent.clone())
       .collect(),
+    done_time: task.done_at.as_deref().and_then(dates::parse_datetime).map(|t| t.format("%H:%M").to_string()),
   }
 }
 
@@ -234,6 +239,7 @@ pub fn board(db: &Database, filter: &BoardFilter) -> Result<Board> {
     sessions,
     suggestions: db.get_suggestions(true)?.iter().map(|s| suggestion_view(s, now)).collect(),
     projects: db.get_projects()?.iter().map(project_view).collect(),
+    window_minutes: window.default,
   })
 }
 

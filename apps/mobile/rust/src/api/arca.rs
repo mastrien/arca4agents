@@ -88,6 +88,11 @@ pub fn delete_project(id: i64) -> Result<()> {
 
 // ---------- Sincronização ----------
 
+/// Nome com que o celular aparece no PC ("Pixel 8").
+pub fn set_device_name(name: String) -> Result<()> {
+  with_db(|db| arca_core::net::set_device_name(db, &name))
+}
+
 /// Pareia com o PC a partir do conteúdo do QR code. Devolve o `Peer` em JSON.
 pub fn pair(code: String) -> Result<String> {
   let pairing = Pairing::from_json(&code)?;

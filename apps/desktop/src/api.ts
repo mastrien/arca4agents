@@ -17,6 +17,7 @@ export interface TaskView {
   created_by: string;
   agent: string | null;
   working_agents: string[];
+  done_time: string | null;
 }
 
 export interface SessionView {
@@ -60,6 +61,7 @@ export interface Board {
   sessions: SessionView[];
   suggestions: SuggestionView[];
   projects: ProjectView[];
+  window_minutes: number;
 }
 
 export interface HistoryView {
@@ -79,6 +81,7 @@ export interface SyncStatus {
   device: string;
   urls: string[];
   log: string[];
+  clients: { name: string; last_seen_label: string }[];
   error: string | null;
 }
 
@@ -122,3 +125,12 @@ export const api = {
   pairing: () => invoke<{ svg: string; code: string }>("pairing"),
   rotateToken: () => invoke<void>("rotate_token"),
 };
+
+// Cor estável por projeto, derivada do nome (o app do celular usa a mesma conta).
+const PROJECT_COLORS = ["#3B6FD8", "#C2691B", "#7A4FC4", "#1F8A63", "#C23B6B", "#2A8C9C", "#8C6A1F", "#5A615C"];
+
+export function projectColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) & 0x7fffffff;
+  return PROJECT_COLORS[hash % PROJECT_COLORS.length];
+}

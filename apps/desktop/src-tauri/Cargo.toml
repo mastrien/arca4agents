@@ -16,6 +16,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 arca-core = { workspace = true, features = ["server"] }
 anyhow.workspace = true
+chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = [] }

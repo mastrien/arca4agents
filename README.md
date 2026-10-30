@@ -201,6 +201,9 @@ arca sync unpair DESKTOP-XYZ
 arca sync rotate-token            # no PC: invalida todos os pareamentos
 ```
 
+Cada aparelho se apresenta pelo nome (o app do celular usa o modelo, ex.: "Pixel 8"), e o app
+desktop mostra quem sincronizou e quando.
+
 O tráfego é HTTP sem criptografia, protegido por um token. Isso basta na rede de casa, mas não
 exponha a porta na internet. No primeiro `arca serve`, o Windows pede para liberar o firewall
 (redes privadas).

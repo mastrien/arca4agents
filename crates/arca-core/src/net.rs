@@ -11,6 +11,10 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_PORT: u16 = 7377;
 pub const HEADER_DEVICE: &str = "X-Arca-Device";
 pub const HEADER_SINCE: &str = "X-Arca-Since";
+/// Nome amigável do cliente ("Pixel 8"), só para exibição no servidor.
+pub const HEADER_NAME: &str = "X-Arca-Name";
+
+const META_DEVICE_NAME: &str = "device_name";
 
 /// O que o QR code do servidor carrega.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -49,6 +53,16 @@ pub struct ServerInfo {
 /// Nome deste computador, para identificar o servidor no celular.
 pub fn host_name() -> String {
   std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_else(|_| "Arca".to_string())
+}
+
+/// Como este aparelho se apresenta ao servidor: o nome salvo (o app do celular grava o modelo)
+/// ou o nome do computador.
+pub fn device_name(db: &crate::persistence::Database) -> String {
+  db.get_meta(META_DEVICE_NAME).ok().flatten().filter(|n| !n.is_empty()).unwrap_or_else(host_name)
+}
+
+pub fn set_device_name(db: &crate::persistence::Database, name: &str) -> anyhow::Result<()> {
+  db.set_meta(META_DEVICE_NAME, name.trim())
 }
 
 #[cfg(feature = "server")]
@@ -104,8 +118,8 @@ pub mod server {
   /// O que aconteceu em cada requisição, para quem estiver mostrando o servidor (CLI ou app).
   #[derive(Debug, Clone)]
   pub enum Event {
-    Pushed { client: String, report: sync::ApplyReport },
-    Pulled { client: String, rows: usize },
+    Pushed { client: String, name: Option<String>, report: sync::ApplyReport },
+    Pulled { client: String, name: Option<String>, rows: usize },
     Rejected { reason: String },
   }
 
@@ -133,11 +147,20 @@ pub mod server {
       .map(|h| h.value.as_str().to_string())
   }
 
-  fn request_parts(request: Request) -> (Request, Option<String>, Option<String>, String) {
+  struct Parts {
+    request: Request,
+    auth: Option<String>,
+    device: Option<String>,
+    name: Option<String>,
+    since: String,
+  }
+
+  fn request_parts(request: Request) -> Parts {
     let auth = header(&request, "Authorization");
     let device = header(&request, HEADER_DEVICE);
+    let name = header(&request, HEADER_NAME).filter(|n| !n.trim().is_empty());
     let since = header(&request, HEADER_SINCE).unwrap_or_default();
-    (request, auth, device, since)
+    Parts { request, auth, device, name, since }
   }
 
   struct Reply {
@@ -157,8 +180,8 @@ pub mod server {
     serde_json::json!({ "error": message }).to_string()
   }
 
-  fn handle(db: &Database, token: &str, parts: (Request, Option<String>, Option<String>, String)) -> (Reply, Option<Event>) {
-    let (mut request, auth, device, since) = parts;
+  fn handle(db: &Database, token: &str, parts: Parts) -> (Reply, Option<Event>) {
+    let Parts { mut request, auth, device, name, since } = parts;
     if auth.as_deref() != Some(format!("Bearer {token}").as_str()) {
       let reply = Reply { request, status: 401, body: error_body("token inválido; pareie de novo") };
       return (reply, Some(Event::Rejected { reason: "token inválido".into() }));
@@ -177,13 +200,13 @@ pub mod server {
         request.as_reader().take(MAX_BODY).read_to_string(&mut body)?;
         let set: ChangeSet = serde_json::from_str(&body).context("corpo do push inválido")?;
         let report = sync::apply(db, &set, false)?;
-        Ok((serde_json::to_string(&report)?, Some(Event::Pushed { client, report })))
+        Ok((serde_json::to_string(&report)?, Some(Event::Pushed { client, name: name.clone(), report })))
       }
       (Method::Get, "/sync/pull") => {
         let client = device.clone().context("falta o cabeçalho X-Arca-Device")?;
         let set = sync::changes_since(db, &since, Some(&client), true)?;
         let rows = set.projects.len() + set.tasks.len() + set.history.len() + set.suggestions.len() + set.tombstones.len();
-        Ok((serde_json::to_string(&set)?, Some(Event::Pulled { client, rows })))
+        Ok((serde_json::to_string(&set)?, Some(Event::Pulled { client, name: name.clone(), rows })))
       }
       _ => anyhow::bail!("rota desconhecida: {path}"),
     })();
@@ -210,6 +233,11 @@ pub mod client {
   use crate::sync::{self, ApplyReport, ChangeSet, Peer};
 
   const MAX_BODY: u64 = 64 * 1024 * 1024;
+
+  /// Cabeçalhos HTTP só aceitam ASCII visível.
+  fn header_safe(name: &str) -> String {
+    name.chars().map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { '?' }).take(64).collect()
+  }
 
   fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
@@ -269,17 +297,20 @@ pub mod client {
 
   fn push_pull(db: &Database, peer: &Peer, url: &str) -> Result<SyncReport> {
     let device = db.device_id();
+    let name = header_safe(&device_name(db));
     let auth = format!("Bearer {}", peer.token);
 
     let outgoing = sync::changes_since(db, &peer.last_pushed, Some(&peer.device), false)?;
     let pushed: ApplyReport = read(agent().post(format!("{url}/sync/push"))
       .header("Authorization", &auth)
       .header(HEADER_DEVICE, &device)
+      .header(HEADER_NAME, &name)
       .send_json(&outgoing)?)?;
 
     let incoming: ChangeSet = read(agent().get(format!("{url}/sync/pull"))
       .header("Authorization", &auth)
       .header(HEADER_DEVICE, &device)
+      .header(HEADER_NAME, &name)
       .header(HEADER_SINCE, &peer.last_pulled)
       .call()?)?;
     if incoming.device != peer.device {

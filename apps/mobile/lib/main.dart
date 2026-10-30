@@ -1,14 +1,15 @@
 import 'dart:io';
 
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:ota_update/ota_update.dart';
 import 'package:path_provider/path_provider.dart';
 
-import 'models.dart';
 import 'screens.dart';
 import 'src/rust/api/arca.dart' as arca;
 import 'src/rust/frb_generated.dart';
 import 'store.dart';
+import 'theme.dart';
 import 'updater.dart';
 
 Future<void> main() async {
@@ -18,6 +19,12 @@ Future<void> main() async {
   final custom = Platform.environment['ARCA_DB'];
   final path = custom ?? '${(await getApplicationDocumentsDirectory()).path}/arca.db';
   await arca.openDatabase(path: path);
+  // O PC mostra o celular pelo modelo ("Pixel 8") na lista de aparelhos sincronizados.
+  if (Platform.isAndroid) {
+    try {
+      await arca.setDeviceName(name: (await DeviceInfoPlugin().androidInfo).model);
+    } catch (_) {}
+  }
 
   final store = ArcaStore();
   await store.start();
@@ -30,12 +37,11 @@ class ArcaApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const seed = Color(0xFF2F6F5E);
     return MaterialApp(
-      title: 'Arca',
+      title: 'Arca4agents',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(colorSchemeSeed: seed, useMaterial3: true),
-      darkTheme: ThemeData(colorSchemeSeed: seed, brightness: Brightness.dark, useMaterial3: true),
+      theme: arcaTheme(Brightness.light),
+      darkTheme: arcaTheme(Brightness.dark),
       home: HomeScreen(store: store),
     );
   }
@@ -50,7 +56,8 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  int tab = 0; // 0 carrinho, 1 estante, 2 feito, 3 agentes
+  int section = 0; // 0 tarefas, 1 agentes, 2 mais
+  String list = 'CART';
   AppUpdate? update;
   String? updateStatus;
 
@@ -77,121 +84,99 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.arca;
     return ListenableBuilder(
       listenable: store,
       builder: (context, _) {
         final board = store.board;
-        final pending = board?.suggestions.length ?? 0;
+        final attention = board == null ? 0 : board.suggestions.length + board.sessions.where((s) => s.activity == 'waiting').length;
         return Scaffold(
-          appBar: AppBar(
-            title: Text(store.project ?? 'Arca'),
-            actions: [
-              if (board != null) _projectMenu(board),
-              IconButton(
-                tooltip: store.lastSyncMessage ?? 'Sincronizar',
-                onPressed: store.peers.isEmpty
-                    ? () => openSync(context, store)
-                    : store.syncing
-                        ? null
-                        : () => store.sync(),
-                icon: store.syncing
-                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                    : Icon(store.peers.isEmpty ? Icons.sync_disabled : Icons.sync),
-              ),
-              PopupMenuButton<String>(
-                onSelected: (value) {
-                  switch (value) {
-                    case 'history':
-                      openHistory(context, store);
-                    case 'projects':
-                      openProjects(context, store);
-                    case 'sync':
-                      openSync(context, store);
-                    default:
-                      store.setAuthors(value);
-                  }
-                },
-                itemBuilder: (_) => [
-                  CheckedPopupMenuItem(value: 'user', checked: store.authors == 'user', child: const Text('Minhas tarefas')),
-                  CheckedPopupMenuItem(value: 'all', checked: store.authors == 'all', child: const Text('+ tarefas de agentes')),
-                  CheckedPopupMenuItem(value: 'agents', checked: store.authors == 'agents', child: const Text('Só de agentes')),
-                  const PopupMenuDivider(),
-                  const PopupMenuItem(value: 'history', child: Text('Histórico')),
-                  const PopupMenuItem(value: 'projects', child: Text('Projetos')),
-                  const PopupMenuItem(value: 'sync', child: Text('Sincronização')),
-                ],
-              ),
-            ],
-          ),
-          body: Column(
-            children: [
-              if (update != null)
-                MaterialBanner(
-                  content: Text(updateStatus ?? 'Nova versão ${update!.version} disponível.'),
-                  actions: [
-                    TextButton(onPressed: () => setState(() => update = null), child: const Text('Depois')),
-                    FilledButton(onPressed: updateStatus == null ? installUpdate : null, child: const Text('Atualizar')),
-                  ],
-                ),
-              if (store.error != null)
-                MaterialBanner(
-                  content: Text(store.error!),
-                  backgroundColor: Theme.of(context).colorScheme.errorContainer,
-                  actions: [TextButton(onPressed: store.clearError, child: const Text('OK'))],
-                ),
-              if (store.lastSyncMessage != null && tab != 3)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(store.lastSyncMessage!, style: Theme.of(context).textTheme.bodySmall),
-                ),
-              Expanded(
-                child: board == null
-                    ? const Center(child: CircularProgressIndicator())
-                    : RefreshIndicator(
-                        onRefresh: () => store.peers.isEmpty ? store.reload() : store.sync(),
-                        child: switch (tab) {
-                          0 => TaskList(store: store, tasks: board.cart, empty: 'Carrinho vazio.\nPegue algo da estante.', showProject: store.project == null),
-                          1 => TaskList(store: store, tasks: board.shelf, empty: 'Estante vazia.', showProject: store.project == null),
-                          2 => TaskList(store: store, tasks: board.done, empty: 'Nada concluído hoje.', showProject: store.project == null),
-                          _ => AgentsPanel(store: store, board: board),
+          body: SafeArea(
+            bottom: false,
+            child: Column(
+              children: [
+                if (update != null)
+                  Notice(
+                    text: updateStatus ?? 'Nova versão ${update!.version} disponível.',
+                    actions: [
+                      TextButton(onPressed: () => setState(() => update = null), child: const Text('Depois')),
+                      TextButton(onPressed: updateStatus == null ? installUpdate : null, child: Text('Atualizar', style: TextStyle(color: c.accent, fontWeight: FontWeight.w600))),
+                    ],
+                  ),
+                if (store.error != null)
+                  Notice(
+                    text: store.error!,
+                    warning: true,
+                    actions: [TextButton(onPressed: store.clearError, child: const Text('OK'))],
+                  ),
+                Expanded(
+                  child: board == null
+                      ? const Center(child: CircularProgressIndicator())
+                      : switch (section) {
+                          0 => TasksScreen(
+                              store: store,
+                              board: board,
+                              list: list,
+                              onList: (v) => setState(() => list = v),
+                              onAttention: () => setState(() => section = 1),
+                            ),
+                          1 => AgentsScreen(store: store, board: board),
+                          _ => MoreScreen(store: store),
                         },
-                      ),
-              ),
-            ],
-          ),
-          floatingActionButton: tab == 3
-              ? null
-              : FloatingActionButton(
-                  onPressed: () => showTaskSheet(context, store, defaultStatus: tab == 1 ? 'SHELF' : 'CART'),
-                  child: const Icon(Icons.add),
                 ),
+              ],
+            ),
+          ),
+          floatingActionButton: section == 0 && board != null
+              ? FloatingActionButton(
+                  tooltip: 'Nova tarefa',
+                  onPressed: () => showTaskSheet(context, store),
+                  child: const Icon(Icons.add, size: 26),
+                )
+              : null,
           bottomNavigationBar: NavigationBar(
-            selectedIndex: tab,
-            onDestinationSelected: (i) => setState(() => tab = i),
+            selectedIndex: section,
+            onDestinationSelected: (i) => setState(() => section = i),
+            height: 68,
             destinations: [
-              NavigationDestination(icon: const Icon(Icons.shopping_cart_outlined), label: 'Carrinho ${board?.cart.length ?? ''}'),
-              NavigationDestination(icon: const Icon(Icons.shelves), label: 'Estante ${board?.shelf.length ?? ''}'),
-              NavigationDestination(icon: const Icon(Icons.check_circle_outline), label: 'Feito ${board?.done.length ?? ''}'),
+              const NavigationDestination(icon: Icon(Icons.format_list_bulleted), label: 'Tarefas'),
               NavigationDestination(
-                icon: Badge(isLabelVisible: pending > 0, label: Text('$pending'), child: const Icon(Icons.smart_toy_outlined)),
+                icon: Badge(
+                  isLabelVisible: attention > 0,
+                  backgroundColor: c.attentionDot,
+                  label: Text('$attention'),
+                  child: const Icon(Icons.smart_toy_outlined),
+                ),
                 label: 'Agentes',
               ),
+              const NavigationDestination(icon: Icon(Icons.more_horiz), label: 'Mais'),
             ],
           ),
         );
       },
     );
   }
+}
 
-  Widget _projectMenu(Board board) {
-    return PopupMenuButton<String?>(
-      tooltip: 'Projeto',
-      icon: const Icon(Icons.folder_outlined),
-      onSelected: (value) => store.setProject(value == '' ? null : value),
-      itemBuilder: (_) => [
-        CheckedPopupMenuItem(value: '', checked: store.project == null, child: const Text('Todos os projetos')),
-        for (final p in board.projects) CheckedPopupMenuItem(value: p.name, checked: store.project == p.name, child: Text(p.name)),
-      ],
+/// Faixa de aviso no topo (atualização, erro).
+class Notice extends StatelessWidget {
+  final String text;
+  final bool warning;
+  final List<Widget> actions;
+  const Notice({super.key, required this.text, this.warning = false, this.actions = const []});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.arca;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: const EdgeInsets.fromLTRB(14, 6, 6, 6),
+      decoration: BoxDecoration(color: warning ? c.attentionTint : c.accentTint, borderRadius: BorderRadius.circular(12)),
+      child: Row(children: [
+        Expanded(child: Text(text, style: TextStyle(fontSize: 13, color: warning ? c.attention : c.accent))),
+        ...actions,
+      ]),
     );
   }
 }
