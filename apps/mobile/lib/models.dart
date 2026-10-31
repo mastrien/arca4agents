@@ -129,6 +129,22 @@ class StatusSnapshot {
         cart = j['cart'];
 }
 
+/// Leitura de cota de um agente (horários locais AAAA-MM-DD HH:MM:SS), vinda do PC.
+class UsageSample {
+  final String agent, windowKey, sampledAt;
+  final double usedPercent;
+  final int? windowMinutes;
+  final String? resetsAt;
+
+  UsageSample.fromJson(Map<String, dynamic> j)
+      : agent = j['agent'],
+        windowKey = j['window_key'],
+        usedPercent = (j['used_percent'] as num).toDouble(),
+        windowMinutes = j['window_minutes'],
+        resetsAt = j['resets_at'],
+        sampledAt = j['sampled_at'];
+}
+
 class Peer {
   final String device;
   final String name;

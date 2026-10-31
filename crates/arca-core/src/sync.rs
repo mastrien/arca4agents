@@ -103,12 +103,17 @@ pub struct ChangeSet {
   pub suggestions: Vec<SuggestionRow>,
   pub tombstones: Vec<Tombstone>,
   pub sessions: Vec<SessionRow>,
+  /// Leituras de cota dos agentes, só do PC para o celular (ver `usage::samples_for_sync`).
+  /// `default`: versões anteriores não mandam o campo.
+  #[serde(default)]
+  pub usage: Vec<crate::usage::UsageSample>,
 }
 
 impl ChangeSet {
   pub fn is_empty(&self) -> bool {
     self.projects.is_empty() && self.tasks.is_empty() && self.history.is_empty()
       && self.suggestions.is_empty() && self.tombstones.is_empty() && self.sessions.is_empty()
+      && self.usage.is_empty()
   }
 }
 
@@ -419,6 +424,10 @@ pub fn apply(db: &Database, set: &ChangeSet, accept_sessions: bool) -> Result<Ap
         params![row.session_id, row.agent, project_id, row.cwd, row.state, row.started_at, row.last_seen_at, task_id],
       )?;
     }
+  }
+
+  if accept_sessions {
+    crate::usage::import(&tx, &set.usage, dates::now())?;
   }
 
   tx.commit()?;

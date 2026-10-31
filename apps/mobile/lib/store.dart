@@ -101,6 +101,9 @@ class ArcaStore extends ChangeNotifier with WidgetsBindingObserver {
   Future<List<StatusSnapshot>> statusSnapshots() async =>
       (jsonDecode(await arca.statusSnapshots()) as List).map((e) => StatusSnapshot.fromJson(e)).toList();
 
+  Future<List<UsageSample>> usageSamples(int days) async =>
+      (jsonDecode(await arca.usageSamples(days: days)) as List).map((e) => UsageSample.fromJson(e)).toList();
+
   /// Board sem filtro de projeto nem de autor, para os gráficos.
   Future<Board> boardAll() async => Board.fromJson(jsonDecode(await arca.board(project: null, authors: 'all')));
 

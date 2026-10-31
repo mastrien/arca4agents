@@ -42,6 +42,10 @@ Future<String> history() => RustLib.instance.api.crateApiArcaHistory();
 Future<String> statusSnapshots() =>
     RustLib.instance.api.crateApiArcaStatusSnapshots();
 
+/// Leituras de cota dos agentes dos últimos `days` dias (`[UsageSample]`), recebidas do PC.
+Future<String> usageSamples({required PlatformInt64 days}) =>
+    RustLib.instance.api.crateApiArcaUsageSamples(days: days);
+
 Future<PlatformInt64> addProject({
   required String name,
   required String policy,

@@ -159,6 +159,9 @@ página de gráficos do desktop.
 Uma leitura igual à anterior só é gravada depois de 30 min, e as leituras com mais de 180 dias
 são apagadas. `arca usage` mostra a última leitura de cada janela.
 
+O celular recebe as leituras do PC na sincronização: na primeira vez, os últimos 30 dias; depois,
+só as novas. Ele não lê a cota sozinho.
+
 ## Board
 
 ```sh

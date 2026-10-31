@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Local, NaiveDateTime};
 use rusqlite::{params, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::dates::{self, DATETIME_FORMAT};
@@ -35,8 +35,8 @@ pub struct Reading {
   pub resets_at: Option<NaiveDateTime>,
 }
 
-/// Leitura gravada.
-#[derive(Debug, Clone, Serialize)]
+/// Leitura gravada. Também é o formato em que as leituras viajam do PC para o celular.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UsageSample {
   pub agent: String,
   pub window_key: String,
@@ -134,18 +134,79 @@ pub fn record(db: &Database, agent: &str, readings: &[Reading], now: NaiveDateTi
     if repeated {
       continue;
     }
-    conn.execute(
-      "INSERT INTO usage_samples (agent, window_key, used_percent, window_minutes, resets_at, sampled_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-      params![agent, reading.window_key, reading.used_percent, reading.window_minutes, resets, now_text],
-    )?;
+    upsert(conn, &UsageSample {
+      agent: agent.to_string(),
+      window_key: reading.window_key.clone(),
+      used_percent: reading.used_percent,
+      window_minutes: reading.window_minutes,
+      resets_at: resets,
+      sampled_at: now_text.clone(),
+    })?;
     written += 1;
   }
   if written > 0 {
-    let cutoff = (now - chrono::Duration::days(KEEP_DAYS)).format(DATETIME_FORMAT).to_string();
-    conn.execute("DELETE FROM usage_samples WHERE sampled_at < ?1", params![cutoff])?;
+    prune(conn, now)?;
   }
   Ok(written)
+}
+
+/// Grava uma leitura; outra leitura da mesma janela no mesmo segundo é substituída.
+fn upsert(conn: &rusqlite::Connection, sample: &UsageSample) -> rusqlite::Result<usize> {
+  conn.execute(
+    "INSERT INTO usage_samples (agent, window_key, used_percent, window_minutes, resets_at, sampled_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+     ON CONFLICT(agent, window_key, sampled_at) DO UPDATE SET
+       used_percent = excluded.used_percent, window_minutes = excluded.window_minutes, resets_at = excluded.resets_at",
+    params![sample.agent, sample.window_key, sample.used_percent, sample.window_minutes, sample.resets_at, sample.sampled_at],
+  )
+}
+
+fn prune(conn: &rusqlite::Connection, now: NaiveDateTime) -> rusqlite::Result<usize> {
+  let cutoff = (now - chrono::Duration::days(KEEP_DAYS)).format(DATETIME_FORMAT).to_string();
+  conn.execute("DELETE FROM usage_samples WHERE sampled_at < ?1", params![cutoff])
+}
+
+// ---------- Sincronização (só do PC para o celular) ----------
+
+/// Na primeira sincronização o celular recebe só este tanto de histórico.
+const SYNC_FIRST_DAYS: i64 = 30;
+/// Limite de leituras por resposta; o resto vem nas próximas sincronizações.
+const SYNC_MAX_ROWS: i64 = 5000;
+
+/// Instante da leitura mais recente deste aparelho; o celular manda para o PC pedir só as novas.
+pub fn latest_sampled_at(db: &Database) -> Result<Option<String>> {
+  Ok(db.conn().query_row("SELECT MAX(sampled_at) FROM usage_samples", [], |r| r.get(0))?)
+}
+
+/// Leituras para um celular que já tem até `since` (inclusive: o celular ignora as repetidas).
+/// Sem `since`, os últimos 30 dias. Em ordem de tempo, no máximo 5000.
+pub fn samples_for_sync(db: &Database, since: Option<&str>, now: NaiveDateTime) -> Result<Vec<UsageSample>> {
+  let first = (now - chrono::Duration::days(SYNC_FIRST_DAYS)).format(DATETIME_FORMAT).to_string();
+  let since = since.filter(|s| !s.is_empty()).map(str::to_string).unwrap_or(first);
+  let mut stmt = db.conn().prepare(
+    "SELECT agent, window_key, used_percent, window_minutes, resets_at, sampled_at FROM usage_samples
+     WHERE sampled_at >= ?1 ORDER BY sampled_at, sample_id LIMIT ?2",
+  )?;
+  let rows = stmt.query_map(params![since, SYNC_MAX_ROWS], |r| Ok(UsageSample {
+    agent: r.get(0)?,
+    window_key: r.get(1)?,
+    used_percent: r.get(2)?,
+    window_minutes: r.get(3)?,
+    resets_at: r.get(4)?,
+    sampled_at: r.get(5)?,
+  }))?.collect::<rusqlite::Result<Vec<_>>>()?;
+  Ok(rows)
+}
+
+/// Grava as leituras recebidas do PC. Devolve quantas chegaram.
+pub fn import(conn: &rusqlite::Connection, samples: &[UsageSample], now: NaiveDateTime) -> Result<usize> {
+  for sample in samples {
+    upsert(conn, sample)?;
+  }
+  if !samples.is_empty() {
+    prune(conn, now)?;
+  }
+  Ok(samples.len())
 }
 
 /// Leituras desde `since` (todas, se `None`), em ordem de agente, janela e tempo.
@@ -226,7 +287,7 @@ pub fn fetch_codex() -> Result<Value> {
     }
   });
 
-  let mut send = |message: Value| -> Result<()> {
+  let send = |stdin: &mut std::process::ChildStdin, message: Value| -> Result<()> {
     writeln!(stdin, "{message}")?;
     stdin.flush()?;
     Ok(())
@@ -248,15 +309,14 @@ pub fn fetch_codex() -> Result<Value> {
   };
 
   let result = (|| {
-    send(json!({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "arca", "title": "Arca", "version": env!("CARGO_PKG_VERSION")}}}))?;
+    send(&mut stdin, json!({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "arca", "title": "Arca", "version": env!("CARGO_PKG_VERSION")}}}))?;
     wait_for(1)?;
-    send(json!({"method": "initialized"}))?;
-    send(json!({"id": 2, "method": "account/rateLimits/read"}))?;
+    send(&mut stdin, json!({"method": "initialized"}))?;
+    send(&mut stdin, json!({"id": 2, "method": "account/rateLimits/read"}))?;
     wait_for(2)
   })();
 
   // Sem stdin o app-server termina sozinho; se não terminar, é encerrado.
-  drop(send);
   drop(stdin);
   std::thread::sleep(Duration::from_millis(200));
   if child.try_wait().ok().flatten().is_none() {
@@ -350,6 +410,28 @@ mod tests {
     let latest = latest(&db).unwrap();
     assert_eq!(latest.len(), 2);
     assert_eq!(latest.iter().find(|s| s.agent == CLAUDE_CODE).unwrap().sampled_at, "2026-10-31 10:40:00");
+  }
+
+  #[test]
+  fn sync_sends_new_samples_and_import_ignores_repeats() {
+    let pc = Database::open_in_memory().unwrap();
+    let phone = Database::open_in_memory().unwrap();
+    let reading = |used: f64| Reading { window_key: "five_hour".into(), used_percent: used, window_minutes: Some(300), resets_at: None };
+    let now = at("2026-10-31 12:00:00");
+    record(&pc, CLAUDE_CODE, &[reading(10.0)], at("2026-09-01 10:00:00")).unwrap(); // antes dos 30 dias
+    record(&pc, CLAUDE_CODE, &[reading(20.0)], at("2026-10-30 10:00:00")).unwrap();
+
+    let first = samples_for_sync(&pc, None, now).unwrap();
+    assert_eq!(first.len(), 1);
+    import(phone.conn(), &first, now).unwrap();
+    let since = latest_sampled_at(&phone).unwrap();
+    assert_eq!(since.as_deref(), Some("2026-10-30 10:00:00"));
+
+    record(&pc, CLAUDE_CODE, &[reading(30.0)], at("2026-10-31 11:00:00")).unwrap();
+    let next = samples_for_sync(&pc, since.as_deref(), now).unwrap();
+    assert_eq!(next.len(), 2); // a repetida (inclusive) e a nova
+    import(phone.conn(), &next, now).unwrap();
+    assert_eq!(samples(&phone, None).unwrap().len(), 2);
   }
 
   #[test]

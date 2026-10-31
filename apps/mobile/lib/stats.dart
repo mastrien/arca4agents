@@ -7,6 +7,7 @@ import 'models.dart';
 import 'screens.dart';
 import 'store.dart';
 import 'theme.dart';
+import 'usage.dart';
 
 void openStats(BuildContext context, ArcaStore store) {
   Navigator.push(context, MaterialPageRoute(builder: (_) => StatsScreen(store: store)));
@@ -274,6 +275,8 @@ class _StatsScreenState extends State<StatsScreen> {
                 final data = _StatsData.compute(history, snapshots, board, _granularity, _includeDaily);
                 return ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 28), children: [
                   _tiles(data),
+                  const SizedBox(height: 14),
+                  UsagePanel(store: widget.store),
                   const SizedBox(height: 14),
                   _timelinePanel(context, data),
                   const SizedBox(height: 12),

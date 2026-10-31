@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_PORT: u16 = 7377;
 pub const HEADER_DEVICE: &str = "X-Arca-Device";
 pub const HEADER_SINCE: &str = "X-Arca-Since";
+/// Leitura de cota mais recente que o celular já tem (`-` se nenhuma). Sem o cabeçalho (versões
+/// anteriores), o pull não leva leituras de cota.
+pub const HEADER_USAGE_SINCE: &str = "X-Arca-Usage-Since";
 /// Nome amigável do cliente ("Pixel 8"), só para exibição no servidor.
 pub const HEADER_NAME: &str = "X-Arca-Name";
 
@@ -153,6 +156,7 @@ pub mod server {
     device: Option<String>,
     name: Option<String>,
     since: String,
+    usage_since: Option<String>,
   }
 
   fn request_parts(request: Request) -> Parts {
@@ -160,7 +164,8 @@ pub mod server {
     let device = header(&request, HEADER_DEVICE);
     let name = header(&request, HEADER_NAME).filter(|n| !n.trim().is_empty());
     let since = header(&request, HEADER_SINCE).unwrap_or_default();
-    Parts { request, auth, device, name, since }
+    let usage_since = header(&request, HEADER_USAGE_SINCE);
+    Parts { request, auth, device, name, since, usage_since }
   }
 
   struct Reply {
@@ -181,7 +186,7 @@ pub mod server {
   }
 
   fn handle(db: &Database, token: &str, parts: Parts) -> (Reply, Option<Event>) {
-    let Parts { mut request, auth, device, name, since } = parts;
+    let Parts { mut request, auth, device, name, since, usage_since } = parts;
     if auth.as_deref() != Some(format!("Bearer {token}").as_str()) {
       let reply = Reply { request, status: 401, body: error_body("token inválido; pareie de novo") };
       return (reply, Some(Event::Rejected { reason: "token inválido".into() }));
@@ -204,7 +209,11 @@ pub mod server {
       }
       (Method::Get, "/sync/pull") => {
         let client = device.clone().context("falta o cabeçalho X-Arca-Device")?;
-        let set = sync::changes_since(db, &since, Some(&client), true)?;
+        let mut set = sync::changes_since(db, &since, Some(&client), true)?;
+        if let Some(usage_since) = &usage_since {
+          let usage_since = Some(usage_since.as_str()).filter(|s| *s != "-");
+          set.usage = crate::usage::samples_for_sync(db, usage_since, crate::dates::now())?;
+        }
         let rows = set.projects.len() + set.tasks.len() + set.history.len() + set.suggestions.len() + set.tombstones.len();
         Ok((serde_json::to_string(&set)?, Some(Event::Pulled { client, name: name.clone(), rows })))
       }
@@ -312,6 +321,7 @@ pub mod client {
       .header(HEADER_DEVICE, &device)
       .header(HEADER_NAME, &name)
       .header(HEADER_SINCE, &peer.last_pulled)
+      .header(HEADER_USAGE_SINCE, crate::usage::latest_sampled_at(db)?.as_deref().unwrap_or("-"))
       .call()?)?;
     if incoming.device != peer.device {
       bail!("{url} agora é outro servidor; pareie de novo");
@@ -361,6 +371,8 @@ mod tests {
 
     let pc = Database::init(&pc_path).unwrap();
     pc.add_task(NewTask { title: "Do PC", daily: false, status: Status::Cart, due_date: None, project_id: None, created_by: USER }).unwrap();
+    let reading = crate::usage::Reading { window_key: "five_hour".into(), used_percent: 42.0, window_minutes: Some(300), resets_at: None };
+    crate::usage::record(&pc, crate::usage::CLAUDE_CODE, &[reading], crate::dates::now()).unwrap();
     let mut pairing = server::pairing(&pc, port).unwrap();
     pairing.urls = vec![format!("http://127.0.0.1:{port}")];
 
@@ -374,6 +386,11 @@ mod tests {
     let report = client::sync_with(&phone, &peer).unwrap();
     assert_eq!(report.pulled.applied, 1);
     assert_eq!(phone.get_tasks(Default::default()).unwrap()[0].title, "Do PC");
+    // A cota chega junto, e a segunda sincronização não duplica.
+    client::sync_with(&phone, &peer).unwrap();
+    let usage = crate::usage::samples(&phone, None).unwrap();
+    assert_eq!(usage.len(), 1);
+    assert_eq!(usage[0].used_percent, 42.0);
 
     let mut wrong = pairing.clone();
     wrong.token = "errado".into();

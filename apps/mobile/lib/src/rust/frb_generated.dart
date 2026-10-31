@@ -66,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 766598170;
+  int get rustContentHash => -1733720745;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -127,6 +127,8 @@ abstract class RustLibApi extends BaseApi {
   Future<String> crateApiArcaSyncNow();
 
   Future<void> crateApiArcaUnpair({required String device});
+
+  Future<String> crateApiArcaUsageSamples({required PlatformInt64 days});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -684,6 +686,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiArcaUnpairConstMeta =>
       const TaskConstMeta(debugName: "unpair", argNames: ["device"]);
+
+  @override
+  Future<String> crateApiArcaUsageSamples({required PlatformInt64 days}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_i_64(days, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 20,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiArcaUsageSamplesConstMeta,
+        argValues: [days],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiArcaUsageSamplesConstMeta =>
+      const TaskConstMeta(debugName: "usage_samples", argNames: ["days"]);
 
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw) {

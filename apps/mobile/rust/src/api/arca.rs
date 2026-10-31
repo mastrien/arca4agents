@@ -78,6 +78,12 @@ pub fn status_snapshots() -> Result<String> {
   with_db(|db| json(&api::status_snapshots(db)?))
 }
 
+/// Leituras de cota dos agentes dos últimos `days` dias (`[UsageSample]`), recebidas do PC.
+pub fn usage_samples(days: i64) -> Result<String> {
+  let since = arca_core::dates::now() - chrono::Duration::days(days.max(1));
+  with_db(|db| json(&arca_core::usage::samples(db, Some(since))?))
+}
+
 pub fn add_project(name: String, policy: String) -> Result<i64> {
   with_db(|db| api::add_project(db, &name, &policy))
 }
