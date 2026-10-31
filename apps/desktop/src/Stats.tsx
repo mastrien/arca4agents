@@ -3,6 +3,7 @@
 // É uma versão demonstrativa; o que sobreviver à avaliação vai também para o celular.
 import { useEffect, useMemo, useState } from "react";
 import { api, Board, HistoryView, projectColor, StatusSnapshot } from "./api";
+import Usage from "./Usage";
 
 type Granularity = "day" | "week" | "month";
 
@@ -223,6 +224,8 @@ export default function Stats({ onBack }: { onBack: () => void }) {
             <Tile label="Concluídas no total" value={data.total} note={`${percent(data.byAgent, data.total)} criadas por agentes`} />
             <Tile label="Abertas" value={data.cartTotal + data.shelfTotal} note={`${data.cartTotal} no carrinho · ${data.shelfTotal} na estante`} />
           </section>
+
+          <Usage />
 
           {/* Esquerda: os gráficos de barras verticais. Direita: todos os cards de percentual, empilhados. */}
           <div className="stats-layout">

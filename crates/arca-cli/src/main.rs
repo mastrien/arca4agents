@@ -281,6 +281,19 @@ enum Commands {
         #[command(subcommand)]
         action: SyncCommands,
     },
+    /// Agents' usage quota: show the latest readings or collect new ones
+    Usage {
+        #[command(subcommand)]
+        action: Option<UsageCommands>,
+    },
+}
+
+#[derive(Subcommand)]
+enum UsageCommands {
+    /// Claude Code statusline: records `rate_limits` from the stdin JSON and prints the line
+    Statusline,
+    /// Ask Codex for its limits (runs `codex app-server`) and record them
+    Codex,
 }
 
 #[derive(Subcommand)]
@@ -348,6 +361,12 @@ fn main() -> ExitCode {
             task: *task,
         };
         silent_ping(options);
+        return ExitCode::SUCCESS;
+    }
+
+    if let Commands::Usage { action: Some(UsageCommands::Statusline) } = &args.action {
+        // Roda o tempo todo dentro do Claude Code: nunca falha, só imprime a linha.
+        println!("{}", silent_statusline());
         return ExitCode::SUCCESS;
     }
 
@@ -426,7 +445,36 @@ fn run(action: Commands) -> anyhow::Result<()> {
             SyncCommands::Unpair {who} => arca::sync_unpair(&db, &who),
             SyncCommands::RotateToken => arca::sync_rotate_token(&db),
         },
+        Commands::Usage {action} => match action {
+            None => arca::usage_show(&db),
+            Some(UsageCommands::Codex) => arca::usage_codex(&db),
+            Some(UsageCommands::Statusline) => unreachable!("handled in main"),
+        },
         Commands::Ping {..} => unreachable!("handled in main"),
+    }
+}
+
+/// Grava a cota da statusline engolindo erros e panics (vão para `ping-errors.log`).
+fn silent_statusline() -> String {
+    use std::io::Read;
+    std::panic::set_hook(Box::new(|_| {}));
+    let result = std::panic::catch_unwind(|| -> anyhow::Result<String> {
+        let mut raw = String::new();
+        std::io::stdin().read_to_string(&mut raw)?;
+        let input: serde_json::Value = serde_json::from_str(&raw)?;
+        let db = Database::init(get_db_path()?)?;
+        arca::usage_statusline(&db, &input)
+    });
+    match result {
+        Ok(Ok(line)) => line,
+        Ok(Err(error)) => {
+            log_ping_error(&format!("statusline: {error:#}"));
+            String::new()
+        }
+        Err(_) => {
+            log_ping_error("statusline: panic");
+            String::new()
+        }
     }
 }
 

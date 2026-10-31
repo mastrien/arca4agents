@@ -10,11 +10,13 @@ use std::sync::{Arc, Mutex};
 use arca_core::api::{self, Board, BoardFilter, HistoryView, ProjectChanges, StatusSnapshotView, TaskChanges, TaskInput};
 use arca_core::net::{self, server};
 use arca_core::persistence::Database;
+use arca_core::usage::{self, UsageSample};
 use serde::Serialize;
 use tauri::State;
 
 const META_SYNC_ENABLED: &str = "desktop_sync_enabled";
 const MAX_LOG: usize = 50;
+const CODEX_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 struct SyncServer {
   stop: Arc<AtomicBool>,
@@ -167,6 +169,34 @@ fn status_snapshots(state: State<AppState>) -> CmdResult<Vec<StatusSnapshotView>
   state.with_db(api::status_snapshots)
 }
 
+/// Leituras de cota dos últimos `days` dias.
+#[tauri::command]
+fn usage_samples(state: State<AppState>, days: i64) -> CmdResult<Vec<UsageSample>> {
+  let since = arca_core::dates::now() - chrono::Duration::days(days.max(1));
+  state.with_db(|db| usage::samples(db, Some(since)))
+}
+
+/// Pergunta a cota ao Codex agora. Roda fora do lock do banco: o `codex app-server` leva ~1 s.
+#[tauri::command]
+async fn refresh_codex_usage(state: State<'_, AppState>) -> CmdResult<()> {
+  let readings = tauri::async_runtime::spawn_blocking(|| usage::fetch_codex().map(|r| usage::parse_codex_rate_limits(&r)))
+    .await
+    .map_err(err)?
+    .map_err(err)?;
+  state.with_db(|db| usage::record(db, usage::CODEX, &readings, arca_core::dates::now()).map(|_| ()))
+}
+
+/// Enquanto o app está aberto, lê a cota do Codex de tempos em tempos, com conexão própria.
+/// Sem o Codex instalado, as tentativas só falham em silêncio.
+fn spawn_codex_usage_poller(db_path: PathBuf) {
+  std::thread::spawn(move || loop {
+    if let Ok(db) = Database::init(&db_path) {
+      let _ = usage::collect_codex(&db);
+    }
+    std::thread::sleep(CODEX_POLL_INTERVAL);
+  });
+}
+
 // ---------- Projetos ----------
 
 #[tauri::command]
@@ -277,6 +307,8 @@ pub fn run() {
   let db = Database::init(&db_path).expect("não foi possível abrir o banco do Arca");
   let sync_enabled = db.get_meta(META_SYNC_ENABLED).ok().flatten().as_deref() != Some("0");
 
+  spawn_codex_usage_poller(db_path.clone());
+
   let state = AppState {
     db_path,
     db: Mutex::new(db),
@@ -297,7 +329,7 @@ pub fn run() {
     .manage(state)
     .invoke_handler(tauri::generate_handler![
       board, add_task, edit_task, move_task, delete_task, approve_suggestion, reject_suggestion, history,
-      status_snapshots,
+      status_snapshots, usage_samples, refresh_codex_usage,
       add_project, edit_project, delete_project, link_folder, unlink_folder,
       sync_status, set_sync_enabled, pairing, rotate_token,
     ])

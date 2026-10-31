@@ -326,6 +326,63 @@ pub fn agents(db: &Database, all: bool, window: Option<i64>) -> Result<()> {
   Ok(())
 }
 
+/// Última leitura de cota de cada agente.
+pub fn usage_show(db: &Database) -> Result<()> {
+  let latest = arca_core::usage::latest(db)?;
+  if latest.is_empty() {
+    println!("{}", "Nenhuma leitura de cota ainda. Configure a statusline do Claude Code ou rode `arca usage codex`.".dimmed());
+    return Ok(());
+  }
+  let now = dates::now();
+  for sample in latest {
+    let label = arca_core::usage::window_label(&sample.window_key, sample.window_minutes);
+    let resets = sample.resets_at.as_deref().and_then(dates::parse_datetime)
+      .filter(|t| *t > now)
+      .map(|t| format!("zera em {}", short_duration(t - now)))
+      .unwrap_or_default();
+    let age = dates::parse_datetime(&sample.sampled_at)
+      .map(|t| format!("lido há {}", short_duration(now - t)))
+      .unwrap_or_default();
+    println!(
+      "{:<12} {:<10} {:>4}%   {}",
+      sample.agent.bold(), label, sample.used_percent.round(),
+      [resets, age].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ").dimmed(),
+    );
+  }
+  Ok(())
+}
+
+/// Lê a cota do Codex pelo `codex app-server` e grava.
+pub fn usage_codex(db: &Database) -> Result<()> {
+  let readings = arca_core::usage::collect_codex(db)?;
+  if readings.is_empty() {
+    println!("{}", "O Codex não informou limites para esta conta.".dimmed());
+  } else {
+    println!("codex: {}", arca_core::usage::statusline_text(&readings));
+  }
+  Ok(())
+}
+
+/// Statusline do Claude Code: grava os `rate_limits` do JSON do stdin e devolve o texto da linha.
+pub fn usage_statusline(db: &Database, input: &serde_json::Value) -> Result<String> {
+  let readings = arca_core::usage::parse_claude_statusline(input);
+  arca_core::usage::record(db, arca_core::usage::CLAUDE_CODE, &readings, dates::now())?;
+  Ok(arca_core::usage::statusline_text(&readings))
+}
+
+/// `2h 15min`, `3d 4h`, `12min`.
+fn short_duration(d: Duration) -> String {
+  let minutes = d.num_minutes().max(0);
+  let (days, hours, mins) = (minutes / 1440, minutes % 1440 / 60, minutes % 60);
+  if days > 0 {
+    format!("{days}d {hours}h")
+  } else if hours > 0 {
+    format!("{hours}h {mins}min")
+  } else {
+    format!("{mins}min")
+  }
+}
+
 /// Largura do terminal: `--width`, senão a detectada, senão `COLUMNS`, senão 100.
 fn terminal_width(explicit: Option<usize>) -> usize {
   explicit

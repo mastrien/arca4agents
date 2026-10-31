@@ -81,6 +81,17 @@ export interface StatusSnapshot {
   cart: number;
 }
 
+// Uma leitura de cota de um agente (Claude Code pela statusline, Codex pelo app-server).
+// Horários locais no formato AAAA-MM-DD HH:MM:SS.
+export interface UsageSample {
+  agent: string;
+  window_key: string;
+  used_percent: number;
+  window_minutes: number | null;
+  resets_at: string | null;
+  sampled_at: string;
+}
+
 export interface SyncStatus {
   running: boolean;
   port: number;
@@ -123,6 +134,8 @@ export const api = {
   reject: (id: number) => invoke<void>("reject_suggestion", { id }),
   history: () => invoke<HistoryView[]>("history"),
   statusSnapshots: () => invoke<StatusSnapshot[]>("status_snapshots"),
+  usageSamples: (days: number) => invoke<UsageSample[]>("usage_samples", { days }),
+  refreshCodexUsage: () => invoke<void>("refresh_codex_usage"),
   addProject: (name: string, policy: Policy) => invoke<number>("add_project", { name, policy }),
   editProject: (id: number, changes: ProjectChanges) => invoke<void>("edit_project", { id, changes }),
   deleteProject: (id: number) => invoke<void>("delete_project", { id }),

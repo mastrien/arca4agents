@@ -137,6 +137,28 @@ O `PostToolUse` existe porque uma pergunta ou um pedido de permissão disparam `
 "esperando" enquanto o agente trabalha. O ping é síncrono (cerca de 60 ms) de propósito: com
 `async`, ele poderia terminar depois do `Stop` e deixar a sessão como "trabalhando".
 
+## Cota dos agentes
+
+O Arca guarda o percentual usado de cada janela de limite dos agentes e mostra a série na
+página de gráficos do desktop.
+
+- **Claude Code** (planos Pro/Max): a cota chega pela statusline. O Claude Code manda o campo
+  `rate_limits` (janelas de 5 h e de 7 dias) no JSON do stdin. `arca usage statusline` grava as
+  janelas e imprime a linha (`5h 23% · 7d 41%`). Ele nunca falha: os erros vão para
+  `ping-errors.log`. Em `~/.claude/settings.json`:
+
+  ```json
+  { "statusLine": { "type": "command", "command": "arca usage statusline" } }
+  ```
+
+- **Codex**: `arca usage codex` sobe o `codex app-server` e chama `account/rateLimits/read`.
+  Enquanto está aberto, o app desktop faz essa leitura a cada 15 min. Na página de gráficos, o
+  botão "Ler o Codex agora" faz uma leitura na hora.
+- **Antigravity**: ainda não há fonte de cota.
+
+Uma leitura igual à anterior só é gravada depois de 30 min, e as leituras com mais de 180 dias
+são apagadas. `arca usage` mostra a última leitura de cada janela.
+
 ## Board
 
 ```sh

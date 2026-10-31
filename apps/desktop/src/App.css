@@ -1646,3 +1646,171 @@ details textarea {
 .chart-note {
   margin: 0;
 }
+
+/* ---------- Cota dos agentes ---------- */
+
+.usage-panel .panel-head .segmented {
+  margin-left: auto;
+}
+
+.usage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.usage-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--recessed-card);
+  min-width: 0;
+}
+
+.usage-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Estado reservado: cor de atenção sempre com ícone e texto. */
+.usage-warn {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--attention);
+}
+
+.usage-value {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.usage-meter {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--recessed);
+  overflow: hidden;
+}
+
+.usage-meter span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+
+.usage-meter span.high {
+  background: var(--attention-dot);
+}
+
+.step-chart {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  grid-template-rows: 90px auto;
+  column-gap: 6px;
+  row-gap: 4px;
+  margin-top: 4px;
+}
+
+.step-y {
+  position: relative;
+}
+
+.step-y span {
+  position: absolute;
+  right: 0;
+  transform: translateY(50%);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.step-plot {
+  position: relative;
+  outline: none;
+  cursor: crosshair;
+}
+
+.step-plot svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.step-grid {
+  stroke: var(--line);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.step-base {
+  stroke: var(--muted);
+  stroke-opacity: 0.5;
+  stroke-width: 1;
+}
+
+.step-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+
+.step-area {
+  fill: var(--accent);
+  fill-opacity: 0.1;
+}
+
+.step-cross {
+  stroke: var(--muted);
+  stroke-width: 1;
+}
+
+.step-dot {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--recessed-card);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.step-tip {
+  opacity: 1;
+  top: -6px;
+  transform: translate(-50%, -100%);
+}
+
+.step-tip.start {
+  left: 0;
+  transform: translate(0, -100%);
+}
+
+.step-tip.end {
+  left: auto;
+  right: 0;
+  transform: translate(0, -100%);
+}
+
+.step-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.step-x {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--muted);
+}
