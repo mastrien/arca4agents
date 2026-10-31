@@ -7,12 +7,17 @@ use chrono::NaiveDate;
 use include_dir::{include_dir, Dir};
 use rusqlite::functions::FunctionFlags;
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction, TransactionBehavior};
-use rusqlite_migration::Migrations;
+use rusqlite_migration::{MigrationDefinitionError, Migrations};
 
 use crate::clock::Hlc;
 use crate::dates::DATE_FORMAT;
 
-// Embed the entire migrations directory into the binary at compile-time
+// Embed the entire migrations directory into the binary at compile-time.
+//
+// Regra das migrations: só acréscimos (tabela, coluna com default ou que aceita NULL, índice,
+// trigger que não quebra escritas antigas). Nunca renomear nem apagar o que já existe. Assim uma
+// versão anterior consegue abrir um banco migrado por uma mais nova (ver `setup`), porque a CLI
+// dos hooks e os apps não se atualizam ao mesmo tempo.
 static MIGRATIONS_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/migrations");
 
 static MIGRATIONS: LazyLock<Migrations<'static>> =
@@ -357,7 +362,14 @@ impl Database {
     let clock = Arc::new(Mutex::new(Hlc::new(new_uuid())));
     register_sync_functions(&conn, &clock)?;
 
-    MIGRATIONS.to_latest(&mut conn)?;
+    match MIGRATIONS.to_latest(&mut conn) {
+      Ok(()) => {}
+      // Banco migrado por uma versão mais nova do Arca (ex.: o app desktop atualizou antes da CLI
+      // dos hooks). As migrations são só acréscimos (ver MIGRATIONS_DIR), então o que esta
+      // versão conhece continua lá: segue com o banco como está, em vez de quebrar.
+      Err(rusqlite_migration::Error::MigrationDefinition(MigrationDefinitionError::DatabaseTooFarAhead)) => {}
+      Err(error) => return Err(error.into()),
+    }
 
     let db = Self { conn, clock };
     db.init_clock()?;
@@ -942,6 +954,26 @@ mod tests {
     let rows: Vec<(&str, &str)> = history.iter().map(|h| (h.title.as_str(), h.date.as_str())).collect();
     assert_eq!(rows, vec![("Ler 10 páginas", "2026-10-26 09:00:00"), ("Comprar café", "2026-10-27 18:30:00")]);
     assert_eq!(db.get_meta(META_LAST_ROLLOVER).unwrap().as_deref(), Some("2026-10-29"));
+  }
+
+  #[test]
+  fn opens_database_migrated_by_a_newer_version() {
+    let dir = std::env::temp_dir().join(format!("arca-ahead-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("ahead.db");
+    let _ = std::fs::remove_file(&path);
+    Database::init(&path).unwrap().add_task(NewTask {
+      title: "antes", daily: false, status: Status::Cart, due_date: None, project_id: None, created_by: USER,
+    }).unwrap();
+
+    // Uma versão futura acrescentou uma coluna e avançou o user_version.
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch("ALTER TABLE tasks ADD COLUMN futuro TEXT; PRAGMA user_version = 999;").unwrap();
+    drop(conn);
+
+    let db = Database::init(&path).unwrap();
+    assert_eq!(db.get_tasks(TaskFilter::default()).unwrap()[0].title, "antes");
+    let _ = std::fs::remove_dir_all(&dir);
   }
 
   #[test]

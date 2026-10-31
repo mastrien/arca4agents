@@ -275,3 +275,9 @@ crates/arca-cli    binário `arca` (CLI, MCP, hooks)
 cargo test
 cargo clippy --all-targets
 ```
+
+**Migrations só acrescentam:** tabela, coluna com default ou que aceita NULL, índice. Nunca
+renomeiam nem apagam o que existe. A partir da 0.8.0, uma versão anterior abre um banco migrado
+por uma mais nova em vez de recusar. Isso importa porque a CLI dos hooks (`cargo install`), o app
+desktop e o celular não se atualizam ao mesmo tempo. Para testar o app em modo dev com migration
+nova, use `ARCA_DB` com um banco separado.
