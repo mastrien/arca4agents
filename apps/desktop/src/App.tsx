@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { getVersion } from "@tauri-apps/api/app";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, Update } from "@tauri-apps/plugin-updater";
 import {
@@ -41,6 +42,10 @@ export default function App() {
   const [authors, setAuthors] = useState<Authors>(() => (localStorage.getItem(AUTHORS_KEY) as Authors) || "all");
   const [modal, setModal] = useState<Modal>(null);
   const [view, setView] = useState<"board" | "stats">("board");
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    getVersion().then(setVersion).catch(() => {});
+  }, []);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -82,13 +87,14 @@ export default function App() {
   const edit = (task: TaskView) => setModal({ kind: "edit", task });
 
   return (
-    <div className="app">
+    <div className={`app ${view === "board" ? "board-view" : ""}`}>
       <header className="topbar">
         <div className="brand">
           <ArcaMark />
           <span className="wordmark">
             Arca<span>4agents</span>
           </span>
+          {version && <span className="version">v{version}</span>}
         </div>
 
         {view === "board" && (
@@ -453,14 +459,17 @@ function Column({ kind, title, hint, status, tasks, run, onEdit, showProject }: 
         <span className="count">{tasks.length}</span>
         <span className="hint">{hint}</span>
       </div>
-      {tasks.length === 0 && <div className="empty">vazio</div>}
-      {tasks.map((task, i) =>
-        status === "DONE" ? (
-          <DoneRow key={task.id} task={task} run={run} showProject={showProject} />
-        ) : (
-          <Card key={task.id} task={task} position={status === "CART" ? i : null} run={run} onEdit={onEdit} showProject={showProject} />
-        ),
-      )}
+      {/* A lista cresce até o espaço disponível e depois rola; o cabeçalho fica fixo. */}
+      <div className="column-body">
+        {tasks.length === 0 && <div className="empty">vazio</div>}
+        {tasks.map((task, i) =>
+          status === "DONE" ? (
+            <DoneRow key={task.id} task={task} run={run} showProject={showProject} />
+          ) : (
+            <Card key={task.id} task={task} position={status === "CART" ? i : null} run={run} onEdit={onEdit} showProject={showProject} />
+          ),
+        )}
+      </div>
     </div>
   );
 }

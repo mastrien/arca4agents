@@ -408,7 +408,7 @@ class TaskCard extends StatelessWidget {
         secondaryBackground: swipe(_back, false),
         confirmDismiss: (direction) async {
           final target = direction == DismissDirection.startToEnd ? _forward : _back;
-          if (target != null) await store.moveTask(task.id, target);
+          if (target != null) await moveWithUndo(context, store, task, target);
           return false; // o board recarregado já tira o cartão da lista
         },
         child: Material(
@@ -470,7 +470,7 @@ class DoneRow extends StatelessWidget {
         child: const Text('Reabrir', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
       ),
       confirmDismiss: (_) async {
-        await store.moveTask(task.id, 'CART');
+        await moveWithUndo(context, store, task, 'CART');
         return false;
       },
       child: InkWell(
@@ -493,6 +493,30 @@ class DoneRow extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Move a tarefa e mostra um aviso com o que mudou e um "Desfazer", que a devolve para onde estava
+/// (para o caso de um deslize sem querer).
+Future<void> moveWithUndo(BuildContext context, ArcaStore store, TaskView task, String target) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final from = task.status;
+  if (!await store.moveTask(task.id, target)) return;
+  final what = switch ((from, target)) {
+    ('DONE', 'CART') => 'reaberta',
+    (_, 'DONE') => 'concluída',
+    (_, 'CART') => 'foi para o carrinho',
+    (_, 'SHELF') => 'foi para a estante',
+    _ => 'movida',
+  };
+  messenger
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(
+      content: Text('“${task.title}” $what', maxLines: 2, overflow: TextOverflow.ellipsis),
+      duration: const Duration(seconds: 4),
+      // Com ação, o Flutter mantém o aviso até ele ser fechado; aqui ele some sozinho.
+      persist: false,
+      action: SnackBarAction(label: 'Desfazer', onPressed: () => store.moveTask(task.id, from)),
+    ));
 }
 
 // ---------- Formulário de tarefa ----------

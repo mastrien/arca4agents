@@ -1844,3 +1844,73 @@ button.link-button:hover {
   color: var(--accent-strong);
   text-decoration: underline;
 }
+
+/* ---------- Versão e colunas com rolagem ---------- */
+
+.version {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* Os cards ficam num corpo próprio, para a coluna poder rolar só a lista. O espaço entre os
+   cards é o mesmo de antes (o gap da coluna). */
+.column-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  /* Reserva a faixa da barra de rolagem: aparecer ou sumir não mexe na largura dos cards. */
+  scrollbar-gutter: stable;
+  /* Respiro para o anel de foco e a sombra dos cards não serem cortados pela rolagem. */
+  margin: -4px -6px -4px -4px;
+  padding: 4px 2px 4px 4px;
+}
+
+/* Telas estreitas (colunas empilhadas): cada coluna rola a partir de 70% da altura da janela. */
+.column-body {
+  max-height: 70vh;
+}
+
+/* Telas largas: o quadro ocupa a altura da janela. Cada coluna cresce com o conteúdo até o fim
+   da tela e então rola por dentro; o painel lateral também. Nada de altura fixa. */
+@media (min-width: 1200px) {
+  .app.board-view {
+    height: 100vh;
+    min-height: 0;
+  }
+
+  .app.board-view .content {
+    min-height: 0;
+  }
+
+  .app.board-view .layout {
+    flex: 1 1 auto;
+    min-height: 0;
+    flex-wrap: nowrap;
+    align-items: stretch;
+  }
+
+  .app.board-view .columns {
+    min-height: 0;
+    flex-wrap: nowrap;
+    align-items: flex-start;
+  }
+
+  .app.board-view .column {
+    max-height: 100%;
+    min-height: 120px;
+  }
+
+  .app.board-view .column-body {
+    max-height: none;
+    flex: 0 1 auto;
+  }
+
+  .app.board-view .side {
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
+}
