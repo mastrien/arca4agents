@@ -1814,3 +1814,33 @@ details textarea {
   font-size: 10px;
   color: var(--muted);
 }
+
+/* ---------- Sessões: origem e link do controle remoto ---------- */
+
+.session-origin {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Botão com cara de link; altura fixa e sem borda, para o hover não mexer no layout. */
+button.link-button {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  margin-top: 2px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+button.link-button:hover {
+  background: none;
+  color: var(--accent-strong);
+  text-decoration: underline;
+}

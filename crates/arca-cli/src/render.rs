@@ -212,7 +212,11 @@ pub fn render_sessions(sessions: &[Session], now: NaiveDateTime, window: ActiveW
         line.push_str(&format!(" {} em {} {}", separator(), format!("#{id}").purple(), title));
       }
       if session.project_name.is_none() {
-        line.push_str(&format!(" {} {}", separator(), session.cwd.dimmed()));
+        let origin = agents::origin(&session.session_id, &session.cwd);
+        line.push_str(&format!(" {} {}", separator(), origin.dimmed()));
+      }
+      if let Some(url) = &session.remote_url {
+        line.push_str(&format!(" {} {}", separator(), url.blue()));
       }
       println!("{line}");
     }

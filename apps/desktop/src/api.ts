@@ -30,6 +30,10 @@ export interface SessionView {
   last_seen_label: string;
   task_id: number | null;
   task_title: string | null;
+  // Dica de onde a sessão veio, só quando ela não tem projeto.
+  origin: string | null;
+  // Link da sessão no controle remoto nativo do agente (Remote Control do Claude Code).
+  remote_url: string | null;
 }
 
 export interface SuggestionView {

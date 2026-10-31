@@ -89,6 +89,9 @@ pub struct SessionRow {
   pub started_at: Option<String>,
   pub last_seen_at: Option<String>,
   pub task_uuid: Option<String>,
+  /// `default`: versões anteriores não mandam o campo.
+  #[serde(default)]
+  pub remote_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -206,7 +209,7 @@ pub fn changes_since(db: &Database, since: &str, exclude_device: Option<&str>, i
 
   if include_sessions {
     let mut stmt = conn.prepare(
-      "SELECT s.session_id, s.agent, p.uuid, s.cwd, s.state, s.started_at, s.last_seen_at, t.uuid
+      "SELECT s.session_id, s.agent, p.uuid, s.cwd, s.state, s.started_at, s.last_seen_at, t.uuid, s.remote_url
         FROM agent_sessions s
           LEFT JOIN projects p ON p.project_id = s.project_id
           LEFT JOIN tasks t ON t.task_id = s.task_id
@@ -214,7 +217,7 @@ pub fn changes_since(db: &Database, since: &str, exclude_device: Option<&str>, i
     )?;
     set.sessions = stmt.query_map([], |r| Ok(SessionRow {
       session_id: r.get(0)?, agent: r.get(1)?, project_uuid: r.get(2)?, cwd: r.get(3)?, state: r.get(4)?,
-      started_at: r.get(5)?, last_seen_at: r.get(6)?, task_uuid: r.get(7)?,
+      started_at: r.get(5)?, last_seen_at: r.get(6)?, task_uuid: r.get(7)?, remote_url: r.get(8)?,
     }))?.collect::<rusqlite::Result<Vec<_>>>()?;
   }
 
@@ -416,12 +419,13 @@ pub fn apply(db: &Database, set: &ChangeSet, accept_sessions: bool) -> Result<Ap
       let project_id = local_id(&tx, "projects", "project_id", row.project_uuid.as_deref())?;
       let task_id = local_id(&tx, "tasks", "task_id", row.task_uuid.as_deref())?;
       tx.execute(
-        "INSERT INTO agent_sessions (session_id, agent, project_id, cwd, state, started_at, last_seen_at, task_id)
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "INSERT INTO agent_sessions (session_id, agent, project_id, cwd, state, started_at, last_seen_at, task_id, remote_url)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
           ON CONFLICT(session_id) DO UPDATE SET agent = excluded.agent, project_id = excluded.project_id,
-            cwd = excluded.cwd, state = excluded.state, last_seen_at = excluded.last_seen_at, task_id = excluded.task_id
+            cwd = excluded.cwd, state = excluded.state, last_seen_at = excluded.last_seen_at, task_id = excluded.task_id,
+            remote_url = excluded.remote_url
           WHERE excluded.last_seen_at >= agent_sessions.last_seen_at",
-        params![row.session_id, row.agent, project_id, row.cwd, row.state, row.started_at, row.last_seen_at, task_id],
+        params![row.session_id, row.agent, project_id, row.cwd, row.state, row.started_at, row.last_seen_at, task_id, row.remote_url],
       )?;
     }
   }

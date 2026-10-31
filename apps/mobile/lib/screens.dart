@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -692,7 +693,15 @@ class AgentsScreen extends StatelessWidget {
                             const TextSpan(text: ' está esperando você'),
                           ]), style: TextStyle(fontSize: 15, color: c.attention)),
                           const SizedBox(height: 2),
-                          Text('${s.project ?? 'sem projeto'} · ${s.lastSeenLabel} · responda no PC', style: TextStyle(fontSize: 13, color: c.attention)),
+                          Text('${s.place} · ${s.lastSeenLabel}${s.remoteUrl == null ? ' · responda no PC' : ''}', style: TextStyle(fontSize: 13, color: c.attention)),
+                          if (s.remoteUrl != null) ...[
+                            const SizedBox(height: 8),
+                            FilledButton.tonalIcon(
+                              onPressed: () => openRemote(context, s.remoteUrl!),
+                              icon: const Icon(Icons.open_in_new, size: 16),
+                              label: const Text('Abrir no Claude'),
+                            ),
+                          ],
                         ]),
                       ),
                     ]),
@@ -752,12 +761,19 @@ class AgentsScreen extends StatelessWidget {
                             const SizedBox(height: 3),
                             Text(
                               [
-                                s.project ?? 'sem projeto',
+                                s.place,
                                 if (s.taskId != null && s.taskTitle != null) 'em #${s.taskId} ${s.taskTitle}',
                                 s.activity == 'possibly_stopped' ? 'último sinal ${s.lastSeenLabel}' : s.lastSeenLabel,
                               ].join(' · '),
                               style: TextStyle(fontSize: 13, color: c.muted),
                             ),
+                            if (s.remoteUrl != null && s.activity != 'ended')
+                              TextButton.icon(
+                                style: TextButton.styleFrom(padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
+                                onPressed: () => openRemote(context, s.remoteUrl!),
+                                icon: const Icon(Icons.open_in_new, size: 15),
+                                label: const Text('Abrir no Claude'),
+                              ),
                           ]),
                         ),
                       ]),
@@ -773,6 +789,14 @@ class AgentsScreen extends StatelessWidget {
       ),
     ]);
   }
+}
+
+/// Abre a sessão no controle remoto nativo do agente. O link do claude.ai abre o app do Claude
+/// quando ele está instalado; senão, o navegador.
+Future<void> openRemote(BuildContext context, String url) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final ok = await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication).catchError((_) => false);
+  if (!ok) messenger.showSnackBar(const SnackBar(content: Text('Não consegui abrir o link.')));
 }
 
 // ---------- Mais ----------

@@ -94,6 +94,17 @@ arca ping --state working --agent antigravity --task 12   # registro manual, lig
 
 Quando a sessão está ligada a uma tarefa, o painel mostra "em #12 Título".
 
+Sessão sem projeto ganha uma dica de origem, como `app Claude · sessão lateral`, `~/desktop/notas`,
+`worktree de c:/root_lab/app`, `WSL · c:/x`, `provavelmente nuvem · /home/user/repo` ou
+`· pelo MCP, sem hooks`. Ao ligar uma pasta a um projeto, as sessões que já rodavam nela passam
+para o projeto.
+
+Com o Remote Control do Claude Code ligado, o `arca ping` lê o link da sessão
+(`https://claude.ai/code/session_...`) no fim do transcript, nos eventos `SessionStart`,
+`UserPromptSubmit`, `Stop` e `Notification`. O desktop e o celular mostram então o botão
+"Abrir no Claude". O formato do transcript não é documentado; se mudar, o botão só deixa de
+aparecer.
+
 O nome do agente vem de `--agent` ou da variável `ARCA_AGENT`. Ele é declarado pelo próprio
 agente: serve para uso local e **não é** um mecanismo de segurança.
 

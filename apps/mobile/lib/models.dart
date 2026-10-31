@@ -36,6 +36,10 @@ class SessionView {
   final String lastSeenLabel;
   final int? taskId;
   final String? taskTitle;
+  /// Dica de onde a sessão veio, só quando ela não tem projeto.
+  final String? origin;
+  /// Link da sessão no controle remoto nativo do agente (Remote Control do Claude Code).
+  final String? remoteUrl;
 
   SessionView.fromJson(Map<String, dynamic> j)
       : sessionId = j['session_id'],
@@ -45,7 +49,12 @@ class SessionView {
         activityLabel = j['activity_label'],
         lastSeenLabel = j['last_seen_label'],
         taskId = j['task_id'],
-        taskTitle = j['task_title'];
+        taskTitle = j['task_title'],
+        origin = j['origin'],
+        remoteUrl = j['remote_url'];
+
+  /// Projeto, ou a origem quando não há projeto.
+  String get place => project ?? origin ?? 'sem projeto';
 }
 
 class SuggestionView {

@@ -56,6 +56,10 @@ pub struct SessionView {
   pub last_seen_label: String,
   pub task_id: Option<i64>,
   pub task_title: Option<String>,
+  /// Dica de onde a sessão veio, só quando ela não tem projeto ("app Claude · sessão lateral").
+  pub origin: Option<String>,
+  /// Link da sessão no controle remoto nativo do agente (Remote Control do Claude Code).
+  pub remote_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -169,6 +173,8 @@ fn session_view(session: &Session, now: chrono::NaiveDateTime, window: ActiveWin
     last_seen_label: ago(&session.last_seen_at, now),
     task_id: session.task_id,
     task_title: session.task_title.clone(),
+    origin: session.project_name.is_none().then(|| agents::origin(&session.session_id, &session.cwd)),
+    remote_url: session.remote_url.clone(),
   }
 }
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, Update } from "@tauri-apps/plugin-updater";
 import {
@@ -573,9 +574,10 @@ function Sessions({ sessions, windowMinutes }: { sessions: SessionView[]; window
             <div>
               <strong>{s.agent}</strong> está esperando você
             </div>
-            <div className="small">
-              {s.project ?? "sem projeto"} · {s.last_seen_label}
+            <div className="small" title={s.cwd}>
+              {s.project ?? s.origin ?? "sem projeto"} · {s.last_seen_label}
             </div>
+            <RemoteLink session={s} />
           </div>
         </div>
       ))}
@@ -604,12 +606,29 @@ function Sessions({ sessions, windowMinutes }: { sessions: SessionView[]; window
                   {s.task_id && s.task_title ? `em #${s.task_id} ${s.task_title} · ` : ""}
                   {s.activity === "possibly_stopped" ? `último sinal ${s.last_seen_label}` : s.last_seen_label}
                 </div>
+                {s.origin && (
+                  <div className="muted small session-origin" title={s.cwd}>
+                    origem: {s.origin}
+                  </div>
+                )}
+                {s.activity !== "ended" && <RemoteLink session={s} />}
               </div>
             </div>
           ))}
         </div>
       ))}
     </section>
+  );
+}
+
+// Abre a sessão no controle remoto nativo do agente (hoje, o Remote Control do Claude Code).
+function RemoteLink({ session }: { session: SessionView }) {
+  if (!session.remote_url) return null;
+  const url = session.remote_url;
+  return (
+    <button className="link-button small" title={url} onClick={() => openUrl(url).catch(() => {})}>
+      Abrir no Claude ↗
+    </button>
   );
 }
 

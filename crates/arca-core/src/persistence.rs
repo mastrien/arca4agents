@@ -176,6 +176,8 @@ pub struct Session {
   pub task_title: Option<String>,
   /// Janela de "ativo agora" do projeto da sessão, se houver.
   pub project_window: Option<i64>,
+  /// Link da sessão no controle remoto nativo do agente, se ele estiver ligado.
+  pub remote_url: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -682,6 +684,12 @@ impl Database {
           "INSERT INTO project_folders (project_id, folder_path) VALUES (?1, ?2)",
           params![project_id, folder],
         )?;
+        // Sessões sem projeto que já rodavam nessa pasta passam a ser do projeto.
+        self.conn.execute(
+          "UPDATE agent_sessions SET project_id = ?1
+            WHERE project_id IS NULL AND (cwd = ?2 OR substr(cwd, 1, length(?2) + 1) = ?2 || '/')",
+          params![project_id, folder],
+        )?;
         Ok(true)
       }
     }
@@ -767,7 +775,7 @@ impl Database {
   pub fn get_sessions(&self) -> anyhow::Result<Vec<Session>> {
     let mut stmt = self.conn.prepare(
       "SELECT s.session_id, s.agent, p.project_name, s.cwd, s.state, s.started_at, s.last_seen_at,
-          s.task_id, t.task_title, p.active_window_minutes
+          s.task_id, t.task_title, p.active_window_minutes, s.remote_url
         FROM agent_sessions s
           LEFT JOIN projects p ON p.project_id = s.project_id
           LEFT JOIN tasks t ON t.task_id = s.task_id
@@ -785,6 +793,7 @@ impl Database {
         task_id: row.get(7)?,
         task_title: row.get(8)?,
         project_window: row.get(9)?,
+        remote_url: row.get(10)?,
       })
     })?.collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(sessions)
@@ -807,6 +816,12 @@ impl Database {
       "UPDATE agent_sessions SET state = 'WORKING', last_seen_at = DATETIME('now', 'localtime') WHERE session_id = ?1",
       params![session_id],
     )?;
+    Ok(())
+  }
+
+  /// Guarda o link da sessão no controle remoto nativo do agente.
+  pub fn set_session_remote_url(&self, session_id: &str, url: Option<&str>) -> anyhow::Result<()> {
+    self.conn.execute("UPDATE agent_sessions SET remote_url = ?1 WHERE session_id = ?2", params![url, session_id])?;
     Ok(())
   }
 
