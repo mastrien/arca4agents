@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use arca_core::api::{self, Board, BoardFilter, HistoryView, ProjectChanges, TaskChanges, TaskInput};
+use arca_core::api::{self, Board, BoardFilter, HistoryView, ProjectChanges, StatusSnapshotView, TaskChanges, TaskInput};
 use arca_core::net::{self, server};
 use arca_core::persistence::Database;
 use serde::Serialize;
@@ -162,6 +162,11 @@ fn history(state: State<AppState>) -> CmdResult<Vec<HistoryView>> {
   state.with_db(api::history)
 }
 
+#[tauri::command]
+fn status_snapshots(state: State<AppState>) -> CmdResult<Vec<StatusSnapshotView>> {
+  state.with_db(api::status_snapshots)
+}
+
 // ---------- Projetos ----------
 
 #[tauri::command]
@@ -292,6 +297,7 @@ pub fn run() {
     .manage(state)
     .invoke_handler(tauri::generate_handler![
       board, add_task, edit_task, move_task, delete_task, approve_suggestion, reject_suggestion, history,
+      status_snapshots,
       add_project, edit_project, delete_project, link_folder, unlink_folder,
       sync_status, set_sync_enabled, pairing, rotate_token,
     ])

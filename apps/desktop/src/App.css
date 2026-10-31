@@ -110,6 +110,20 @@ button {
   cursor: pointer;
   font-size: 13px;
   white-space: nowrap;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+button:disabled:hover {
+  border-color: var(--line);
 }
 
 button:hover {
@@ -177,6 +191,11 @@ button.icon:hover {
   background: var(--line-soft);
 }
 
+button.icon.active {
+  background: var(--accent-tint);
+  color: var(--accent);
+}
+
 button.icon.tiny {
   width: 20px;
   height: 20px;
@@ -238,18 +257,23 @@ button.icon.tiny {
   align-items: center;
   gap: 6px;
   color: var(--text-2);
+  /* Peso fixo: trocar o peso no ativo mudava a largura do botão e deslocava os vizinhos. */
+  font-weight: 500;
+}
+
+.chips button:not(.active):hover,
+.segmented button:not(.active):hover {
+  background: var(--surface);
 }
 
 .chips button.active {
   background: var(--text);
   color: var(--surface);
-  font-weight: 500;
 }
 
 .segmented button.active {
   background: var(--surface);
   color: var(--text);
-  font-weight: 500;
   box-shadow: var(--shadow);
 }
 
@@ -503,7 +527,9 @@ button.icon.tiny {
 /* ---------- Cartões ---------- */
 
 .card {
-  background: var(--surface);
+  --card-bg: var(--surface);
+  position: relative;
+  background: var(--card-bg);
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 12px 14px;
@@ -514,7 +540,7 @@ button.icon.tiny {
 }
 
 .column.shelf .card {
-  background: var(--recessed-card);
+  --card-bg: var(--recessed-card);
   padding: 11px 13px;
 }
 
@@ -623,13 +649,38 @@ button.icon.tiny {
   align-items: center;
 }
 
+/* As ações aparecem por cima da faixa de baixo do cartão (metadados), sem mudar a altura dele.
+   A linha de metadados reserva a altura de um botão, então a camada nunca cobre o título. */
+.card .meta {
+  min-height: 28px;
+}
+
 .card .actions {
-  display: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 8px 14px 12px;
+  border-radius: 0 0 10px 10px;
+  background: linear-gradient(to bottom, transparent, var(--card-bg) 8px);
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease;
+}
+
+.column.cart .card .actions {
+  margin-left: 0;
+  padding-left: 34px;
 }
 
 .card:hover .actions,
 .card:focus-within .actions {
-  display: flex;
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
 }
 
 .card .actions button {
@@ -668,7 +719,9 @@ button.icon.tiny {
 }
 
 .done-row .reopen {
-  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
   height: 24px;
   font-size: 12px;
   padding: 0 8px;
@@ -676,7 +729,8 @@ button.icon.tiny {
 
 .done-row:hover .reopen,
 .done-row:focus-within .reopen {
-  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* ---------- Painel lateral ---------- */
@@ -1160,4 +1214,435 @@ details textarea {
   align-items: center;
   padding: 8px 0;
   border-top: 1px solid var(--line-soft);
+}
+
+.history-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.project-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px 1px 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--project) 35%, transparent);
+  background: color-mix(in srgb, var(--project) 12%, transparent);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+.pager .mono {
+  min-width: 120px;
+  text-align: center;
+}
+
+/* ---------- Gráficos ---------- */
+
+.stats {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.stats-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+
+.stats-head h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.stats-daily {
+  margin-left: auto;
+  cursor: pointer;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 16px;
+}
+
+.tile-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.tile-value {
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 2/3 para os gráficos de barras verticais, 1/3 para os cards de percentual empilhados.
+   Empilhados, os cards de altura variável não deixam buracos no meio da página. */
+.stats-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.stats-main,
+.stats-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+@media (max-width: 1100px) {
+  .stats-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.chart-panel .panel-head .segmented {
+  margin-left: auto;
+}
+
+.small-seg button {
+  height: 26px;
+  font-size: 12px;
+  padding: 0 10px;
+}
+
+/* Barras verticais: eixo y à esquerda, grade recessiva, uma cor só (uma série). */
+.bar-chart {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  grid-template-rows: 220px auto;
+  column-gap: 8px;
+  row-gap: 6px;
+}
+
+.bar-chart.compact {
+  grid-template-rows: 160px auto;
+}
+
+.bar-y {
+  position: relative;
+}
+
+.bar-y span {
+  position: absolute;
+  right: 0;
+  transform: translateY(50%);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.bar-plot {
+  position: relative;
+}
+
+.bar-grid {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed var(--line);
+}
+
+.bar-grid.base {
+  border-top: 1px solid var(--muted);
+  opacity: 0.5;
+}
+
+.bar-row {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.bar-slot {
+  position: relative;
+  flex: 1 1 0;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  border-radius: 6px 6px 0 0;
+  outline: none;
+  transition: background-color 0.15s ease;
+}
+
+.bar-slot:hover,
+.bar-slot:focus-visible {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.bar {
+  width: min(100%, 36px);
+  background: var(--accent);
+  border-radius: 4px 4px 0 0;
+  transition: height 0.25s ease;
+}
+
+/* Ancorado no topo da área do gráfico (não acima dela), para não cobrir o cabeçalho do painel. */
+.bar-tip {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  transform: translate(-50%, 4px);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--surface);
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease;
+  z-index: 2;
+}
+
+.bar-tip span {
+  opacity: 0.75;
+}
+
+/* Nas pontas o tooltip abre para dentro, para não sair do painel. */
+.bar-tip.start {
+  left: 0;
+  transform: translate(0, 4px);
+}
+
+.bar-tip.end {
+  left: auto;
+  right: 0;
+  transform: translate(0, 4px);
+}
+
+.bar-slot:hover .bar-tip.start,
+.bar-slot:focus-visible .bar-tip.start,
+.bar-slot:hover .bar-tip.end,
+.bar-slot:focus-visible .bar-tip.end {
+  transform: none;
+}
+
+.bar-slot:hover .bar-tip,
+.bar-slot:focus-visible .bar-tip {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.bar-x {
+  display: flex;
+  gap: 2px;
+}
+
+.bar-x span {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Barras horizontais ordenadas, com rótulo direto (nome + percentual). */
+.ranked {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ranked-row {
+  display: grid;
+  grid-template-columns: minmax(80px, 140px) minmax(0, 1fr) 76px;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.ranked-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ranked-track {
+  height: 10px;
+  background: var(--line-soft);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.ranked-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+
+.ranked-value {
+  text-align: right;
+  font-size: 12px;
+}
+
+/* Gráfico empilhado ao longo do tempo. Cores: slots 1-3 da paleta categórica validada
+   (todos os pares passam no teste de daltonismo nos dois modos), com degraus próprios no escuro. */
+.stats {
+  --series-shelf: #2a78d6;
+  --series-cart: #eb6834;
+  --series-done: #1baf7a;
+}
+
+@media (prefers-color-scheme: dark) {
+  .stats {
+    --series-shelf: #3987e5;
+    --series-cart: #d95926;
+    --series-done: #199e70;
+  }
+}
+
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex: none;
+}
+
+.swatch.shelf {
+  background: var(--series-shelf);
+}
+
+.swatch.cart {
+  background: var(--series-cart);
+}
+
+.swatch.done {
+  background: var(--series-done);
+}
+
+.series-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.chart-panel .panel-head .series-toggles + .segmented {
+  margin-left: 8px;
+}
+
+.series-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: 7px;
+  color: var(--muted);
+}
+
+/* Desligada: a amostra vira só contorno e o texto apaga, sem mudar a largura do botão. */
+.series-toggle:not(.on) .swatch {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--idle);
+}
+
+.series-toggle.on {
+  color: var(--text);
+}
+
+.chart-panel .panel-head {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+.stack {
+  width: min(100%, 36px);
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 2px; /* respiro da cor da superfície entre as fatias */
+  transition: height 0.25s ease;
+}
+
+.seg {
+  flex-basis: 0;
+  min-height: 2px;
+}
+
+.seg:last-child {
+  border-radius: 4px 4px 0 0;
+}
+
+.seg.shelf {
+  background: var(--series-shelf);
+}
+
+.seg.cart {
+  background: var(--series-cart);
+}
+
+.seg.done {
+  background: var(--series-done);
+}
+
+.bar-tip .tip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 1;
+}
+
+.bar-tip .tip-row strong {
+  margin-left: auto;
+  padding-left: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.bar-tip > span:first-child {
+  margin-bottom: 2px;
+}
+
+.chart-note {
+  margin: 0;
 }

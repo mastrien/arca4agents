@@ -38,6 +38,10 @@ Future<void> rejectSuggestion({required PlatformInt64 id}) =>
 
 Future<String> history() => RustLib.instance.api.crateApiArcaHistory();
 
+/// Fotos diárias de estante/carrinho (`[{date, shelf, cart}]`), para os gráficos.
+Future<String> statusSnapshots() =>
+    RustLib.instance.api.crateApiArcaStatusSnapshots();
+
 Future<PlatformInt64> addProject({
   required String name,
   required String policy,

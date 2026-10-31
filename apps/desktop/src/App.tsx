@@ -15,6 +15,7 @@ import {
   SyncStatus,
   TaskView,
 } from "./api";
+import Stats from "./Stats";
 import "./App.css";
 
 // O board é relido periodicamente: hooks, MCP, CLI e a sincronização escrevem no mesmo banco.
@@ -38,6 +39,7 @@ export default function App() {
   const [project, setProject] = useState("");
   const [authors, setAuthors] = useState<Authors>(() => (localStorage.getItem(AUTHORS_KEY) as Authors) || "all");
   const [modal, setModal] = useState<Modal>(null);
+  const [view, setView] = useState<"board" | "stats">("board");
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -88,31 +90,35 @@ export default function App() {
           </span>
         </div>
 
-        <nav className="chips" aria-label="Filtrar por projeto">
-          <button className={project === "" ? "active" : ""} onClick={() => setProject("")}>
-            Todos
-          </button>
-          {board.projects.map((p) => (
-            <button key={p.id} className={project === p.name ? "active" : ""} onClick={() => setProject(p.name)}>
-              <ProjectDot name={p.name} />
-              {p.name}
-            </button>
-          ))}
-        </nav>
+        {view === "board" && (
+          <>
+            <nav className="chips" aria-label="Filtrar por projeto">
+              <button className={project === "" ? "active" : ""} onClick={() => setProject("")}>
+                Todos
+              </button>
+              {board.projects.map((p) => (
+                <button key={p.id} className={project === p.name ? "active" : ""} onClick={() => setProject(p.name)}>
+                  <ProjectDot name={p.name} />
+                  {p.name}
+                </button>
+              ))}
+            </nav>
 
-        <div className="segmented" role="group" aria-label="Autores">
-          {(
-            [
-              ["user", "Minhas"],
-              ["all", "+ agentes"],
-              ["agents", "Só agentes"],
-            ] as [Authors, string][]
-          ).map(([value, label]) => (
-            <button key={value} className={authors === value ? "active" : ""} onClick={() => setAuthors(value)}>
-              {label}
-            </button>
-          ))}
-        </div>
+            <div className="segmented" role="group" aria-label="Autores">
+              {(
+                [
+                  ["user", "Minhas"],
+                  ["all", "+ agentes"],
+                  ["agents", "Só agentes"],
+                ] as [Authors, string][]
+              ).map(([value, label]) => (
+                <button key={value} className={authors === value ? "active" : ""} onClick={() => setAuthors(value)}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
 
         <div className="spacer" />
 
@@ -124,6 +130,15 @@ export default function App() {
           </button>
           <button className="icon" aria-label="Histórico" title="Histórico" onClick={() => setModal({ kind: "history" })}>
             <Icon name="history" />
+          </button>
+          <button
+            className={`icon ${view === "stats" ? "active" : ""}`}
+            aria-label="Gráficos"
+            title="Gráficos"
+            aria-pressed={view === "stats"}
+            onClick={() => setView(view === "stats" ? "board" : "stats")}
+          >
+            <Icon name="chart" />
           </button>
         </div>
       </header>
@@ -137,19 +152,25 @@ export default function App() {
           </button>
         )}
 
-        <AddBar projects={board.projects} defaultProject={project} onAdd={(input) => run(() => api.addTask(input))} />
+        {view === "stats" ? (
+          <Stats onBack={() => setView("board")} />
+        ) : (
+          <>
+            <AddBar projects={board.projects} defaultProject={project} onAdd={(input) => run(() => api.addTask(input))} />
 
-        <div className="layout">
-          <section className="columns" aria-label="Quadro">
-            <Column kind="shelf" title="Estante" hint="fica pra depois" status="SHELF" tasks={board.shelf} run={run} onEdit={edit} showProject={!project} />
-            <Column kind="cart" title="Carrinho" hint="o que fica por perto" status="CART" tasks={board.cart} run={run} onEdit={edit} showProject={!project} />
-            <Column kind="done" title="Feito hoje" hint="vai pro histórico amanhã" status="DONE" tasks={board.done} run={run} onEdit={edit} showProject={!project} />
-          </section>
-          <aside className="side">
-            <Sessions sessions={board.sessions} windowMinutes={board.window_minutes} />
-            <Suggestions board={board} run={run} />
-          </aside>
-        </div>
+            <div className="layout">
+              <section className="columns" aria-label="Quadro">
+                <Column kind="shelf" title="Estante" hint="fica pra depois" status="SHELF" tasks={board.shelf} run={run} onEdit={edit} showProject={!project} />
+                <Column kind="cart" title="Carrinho" hint="o que fica por perto" status="CART" tasks={board.cart} run={run} onEdit={edit} showProject={!project} />
+                <Column kind="done" title="Feito hoje" hint="vai pro histórico amanhã" status="DONE" tasks={board.done} run={run} onEdit={edit} showProject={!project} />
+              </section>
+              <aside className="side">
+                <Sessions sessions={board.sessions} windowMinutes={board.window_minutes} />
+                <Suggestions board={board} run={run} />
+              </aside>
+            </div>
+          </>
+        )}
       </main>
 
       {modal?.kind === "edit" && <EditTask task={modal.task} projects={board.projects} onClose={() => setModal(null)} run={run} />}
@@ -195,6 +216,12 @@ const ICONS: Record<string, React.ReactNode> = {
       <path d="M12 4v4M9 13h.01M15 13h.01" />
     </>
   ),
+  chart: (
+    <>
+      <path d="M4 20h16" />
+      <path d="M7 16v-5M12 16V6M17 16v-8" />
+    </>
+  ),
   phone: (
     <>
       <rect x="7" y="2" width="10" height="20" rx="2" />
@@ -218,6 +245,16 @@ function ProjectDot({ name }: { name: string }) {
 function ProjectTag({ name }: { name: string }) {
   return (
     <span className="meta-project">
+      <ProjectDot name={name} />
+      {name}
+    </span>
+  );
+}
+
+// Tag com o tom do projeto, usada no histórico.
+function ProjectPill({ name }: { name: string }) {
+  return (
+    <span className="project-pill" style={{ "--project": projectColor(name) } as React.CSSProperties}>
       <ProjectDot name={name} />
       {name}
     </span>
@@ -899,28 +936,58 @@ function Sync({ onClose }: { onClose: () => void }) {
   );
 }
 
+const HISTORY_PAGE = 20;
+
 function History({ onClose }: { onClose: () => void }) {
   const [entries, setEntries] = useState<HistoryView[] | null>(null);
+  const [page, setPage] = useState(0);
   useEffect(() => {
     api.history().then(setEntries);
   }, []);
+
+  const pages = entries ? Math.max(1, Math.ceil(entries.length / HISTORY_PAGE)) : 1;
+  const shown = entries?.slice(page * HISTORY_PAGE, (page + 1) * HISTORY_PAGE);
+
   return (
-    <Dialog title="Histórico" onClose={onClose} wide>
+    <Dialog title="Histórico" subtitle={entries?.length ? `${entries.length} concluídas` : undefined} onClose={onClose} wide>
       {!entries && <p className="muted">Carregando…</p>}
       {entries?.length === 0 && <p className="muted">Nada concluído ainda.</p>}
       <div className="history">
-        {entries?.map((h) => (
+        {shown?.map((h) => (
           <div key={h.id} className="history-row">
-            <span className="mono muted small">{h.date}</span>
-            <span>{h.title}</span>
+            <span className="mono muted small" title={h.date}>
+              {h.date.slice(0, 10).split("-").reverse().join("/")}
+            </span>
+            <span className="history-title">
+              {h.title}
+              {h.project && <ProjectPill name={h.project} />}
+            </span>
             <span className="meta">
-              {h.project && <ProjectTag name={h.project} />}
               {h.daily && <span className="meta-daily">diária</span>}
               {h.agent && <AgentChip agent={h.agent} />}
             </span>
           </div>
         ))}
       </div>
+      {entries && pages > 1 && (
+        <nav className="pager" aria-label="Páginas do histórico">
+          <button className="small" disabled={page === 0} onClick={() => setPage(0)} aria-label="Primeira página">
+            «
+          </button>
+          <button className="small" disabled={page === 0} onClick={() => setPage(page - 1)}>
+            ‹ Anterior
+          </button>
+          <span className="muted small mono">
+            {page * HISTORY_PAGE + 1}–{Math.min((page + 1) * HISTORY_PAGE, entries.length)} de {entries.length}
+          </span>
+          <button className="small" disabled={page >= pages - 1} onClick={() => setPage(page + 1)}>
+            Próxima ›
+          </button>
+          <button className="small" disabled={page >= pages - 1} onClick={() => setPage(pages - 1)} aria-label="Última página">
+            »
+          </button>
+        </nav>
+      )}
     </Dialog>
   );
 }

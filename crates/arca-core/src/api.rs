@@ -342,6 +342,19 @@ pub fn history(db: &Database) -> Result<Vec<HistoryView>> {
   }).collect())
 }
 
+/// Tamanho da estante e do carrinho no fim de um dia (só existem a partir da migration 06).
+#[derive(Debug, Clone, Serialize)]
+pub struct StatusSnapshotView {
+  pub date: String,
+  pub shelf: u32,
+  pub cart: u32,
+}
+
+/// Fotos diárias em ordem de data. Um dia ausente repete o último dia anterior a ele.
+pub fn status_snapshots(db: &Database) -> Result<Vec<StatusSnapshotView>> {
+  Ok(db.get_status_snapshots()?.into_iter().map(|(date, shelf, cart)| StatusSnapshotView { date, shelf, cart }).collect())
+}
+
 fn parse_policy(value: &str) -> Result<Policy> {
   match value {
     "NONE" => Ok(Policy::None),

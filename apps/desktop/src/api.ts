@@ -74,6 +74,13 @@ export interface HistoryView {
   agent: string | null;
 }
 
+// Tamanho da estante e do carrinho no fim de um dia; um dia ausente repete o anterior.
+export interface StatusSnapshot {
+  date: string;
+  shelf: number;
+  cart: number;
+}
+
 export interface SyncStatus {
   running: boolean;
   port: number;
@@ -115,6 +122,7 @@ export const api = {
   approve: (id: number) => invoke<void>("approve_suggestion", { id }),
   reject: (id: number) => invoke<void>("reject_suggestion", { id }),
   history: () => invoke<HistoryView[]>("history"),
+  statusSnapshots: () => invoke<StatusSnapshot[]>("status_snapshots"),
   addProject: (name: string, policy: Policy) => invoke<number>("add_project", { name, policy }),
   editProject: (id: number, changes: ProjectChanges) => invoke<void>("edit_project", { id, changes }),
   deleteProject: (id: number) => invoke<void>("delete_project", { id }),

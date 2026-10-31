@@ -569,6 +569,15 @@ impl Database {
     Ok(entries)
   }
 
+  /// Fotos diárias de (data, estante, carrinho), em ordem de data. Gravadas pelos triggers da
+  /// migration 06; um dia sem linha repete o último dia registrado antes dele.
+  pub fn get_status_snapshots(&self) -> anyhow::Result<Vec<(String, u32, u32)>> {
+    let mut stmt = self.conn.prepare("SELECT snapshot_date, shelf, cart FROM status_snapshots ORDER BY snapshot_date")?;
+    let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+      .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+  }
+
   // ---------- Projetos ----------
 
   pub fn add_project(&self, name: &str, policy: Policy) -> anyhow::Result<i64> {
@@ -918,6 +927,29 @@ mod tests {
     let rows: Vec<(&str, &str)> = history.iter().map(|h| (h.title.as_str(), h.date.as_str())).collect();
     assert_eq!(rows, vec![("Ler 10 páginas", "2026-10-26 09:00:00"), ("Comprar café", "2026-10-27 18:30:00")]);
     assert_eq!(db.get_meta(META_LAST_ROLLOVER).unwrap().as_deref(), Some("2026-10-29"));
+  }
+
+  #[test]
+  fn status_snapshot_follows_every_task_write() {
+    let db = Database::open_in_memory().unwrap();
+    let today: String = db.conn().query_row("SELECT DATE('now', 'localtime')", [], |r| r.get(0)).unwrap();
+    let snapshot = |db: &Database| db.get_status_snapshots().unwrap();
+
+    // A migration já grava a foto de hoje, mesmo com o banco vazio.
+    assert_eq!(snapshot(&db), vec![(today.clone(), 0, 0)]);
+
+    let a = add(&db, "No carrinho", false);
+    let b = add(&db, "Também", false);
+    assert_eq!(snapshot(&db), vec![(today.clone(), 0, 2)]);
+
+    db.change_task_status(a, Status::Shelf).unwrap();
+    assert_eq!(snapshot(&db), vec![(today.clone(), 1, 1)]);
+
+    db.change_task_status(b, Status::Done).unwrap();
+    assert_eq!(snapshot(&db), vec![(today.clone(), 1, 0)]);
+
+    db.delete_task(a).unwrap();
+    assert_eq!(snapshot(&db), vec![(today.clone(), 0, 0)]);
   }
 
   #[test]

@@ -5,6 +5,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import 'models.dart';
+import 'stats.dart';
 import 'store.dart';
 import 'theme.dart';
 
@@ -831,6 +832,13 @@ class MoreScreen extends StatelessWidget {
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => openHistory(context, store),
               ),
+              Divider(height: 1, color: c.lineSoft),
+              ListTile(
+                leading: const Icon(Icons.bar_chart),
+                title: const Text('Gráficos'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => openStats(context, store),
+              ),
             ]),
           ),
           const SizedBox(height: 22),
@@ -1017,7 +1025,48 @@ class _ViewfinderPainter extends CustomPainter {
 // ---------- Histórico e projetos ----------
 
 void openHistory(BuildContext context, ArcaStore store) {
-  Navigator.push(context, MaterialPageRoute(builder: (context) {
+  Navigator.push(context, MaterialPageRoute(builder: (_) => HistoryScreen(store: store)));
+}
+
+/// Tag com o tom do projeto, usada no histórico.
+class ProjectPill extends StatelessWidget {
+  final String name;
+  const ProjectPill(this.name, {super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = projectColor(name);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(7, 1, 8, 1),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+        borderRadius: BorderRadius.circular(99),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        ProjectDot(name, size: 7),
+        const SizedBox(width: 5),
+        Text(name, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: context.arca.text2)),
+      ]),
+    );
+  }
+}
+
+class HistoryScreen extends StatefulWidget {
+  final ArcaStore store;
+  const HistoryScreen({super.key, required this.store});
+
+  @override
+  State<HistoryScreen> createState() => _HistoryScreenState();
+}
+
+class _HistoryScreenState extends State<HistoryScreen> {
+  static const _pageSize = 20;
+  late final Future<List<HistoryView>> _items = widget.store.history();
+  int _page = 0;
+
+  @override
+  Widget build(BuildContext context) {
     final c = context.arca;
     return Scaffold(
       body: SafeArea(
@@ -1025,37 +1074,67 @@ void openHistory(BuildContext context, ArcaStore store) {
           const ScreenHeader('Histórico', back: true),
           Expanded(
             child: FutureBuilder<List<HistoryView>>(
-              future: store.history(),
+              future: _items,
               builder: (context, snap) {
                 if (!snap.hasData) return const Center(child: CircularProgressIndicator());
                 final items = snap.data!;
                 if (items.isEmpty) return Center(child: Text('Nada concluído ainda.', style: TextStyle(color: c.muted)));
-                return ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                  itemCount: items.length,
-                  itemBuilder: (_, i) {
-                    final h = items[i];
-                    return Container(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: c.line))),
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(h.title, style: const TextStyle(fontSize: 15)),
-                        const SizedBox(height: 3),
-                        Text(
-                          [h.date, ?h.project, if (h.daily) 'diária', if (h.agent != null) 'por ${h.agent}'].join(' · '),
-                          style: TextStyle(fontSize: 12, color: c.muted, fontFamily: mono),
+                final pages = (items.length / _pageSize).ceil();
+                final page = _page.clamp(0, pages - 1);
+                final shown = items.skip(page * _pageSize).take(_pageSize).toList();
+                return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  Expanded(
+                    child: ListView.builder(
+                      // A chave por página volta a lista para o topo ao trocar de página.
+                      key: PageStorageKey('history-$page'),
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      itemCount: shown.length,
+                      itemBuilder: (_, i) {
+                        final h = shown[i];
+                        final date = h.date.substring(0, 10).split('-').reversed.join('/');
+                        return Container(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: c.line))),
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text(h.title, style: const TextStyle(fontSize: 15)),
+                            const SizedBox(height: 5),
+                            Wrap(spacing: 8, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                              Text(date, style: TextStyle(fontSize: 12, color: c.muted, fontFamily: mono)),
+                              if (h.project != null) ProjectPill(h.project!),
+                              if (h.daily) Text('diária', style: TextStyle(fontSize: 12, color: c.muted)),
+                              if (h.agent != null) AgentChip(h.agent!),
+                            ]),
+                          ]),
+                        );
+                      },
+                    ),
+                  ),
+                  if (pages > 1)
+                    Container(
+                      padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+                      decoration: BoxDecoration(color: c.surface, border: Border(top: BorderSide(color: c.line))),
+                      child: Row(children: [
+                        IconButton(tooltip: 'Primeira página', onPressed: page > 0 ? () => setState(() => _page = 0) : null, icon: const Icon(Icons.first_page)),
+                        IconButton(tooltip: 'Anterior', onPressed: page > 0 ? () => setState(() => _page = page - 1) : null, icon: const Icon(Icons.chevron_left)),
+                        Expanded(
+                          child: Text(
+                            '${page * _pageSize + 1}–${(page + 1) * _pageSize > items.length ? items.length : (page + 1) * _pageSize} de ${items.length}',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontSize: 13, color: c.muted, fontFamily: mono),
+                          ),
                         ),
+                        IconButton(tooltip: 'Próxima', onPressed: page < pages - 1 ? () => setState(() => _page = page + 1) : null, icon: const Icon(Icons.chevron_right)),
+                        IconButton(tooltip: 'Última página', onPressed: page < pages - 1 ? () => setState(() => _page = pages - 1) : null, icon: const Icon(Icons.last_page)),
                       ]),
-                    );
-                  },
-                );
+                    ),
+                ]);
               },
             ),
           ),
         ]),
       ),
     );
-  }));
+  }
 }
 
 const _policies = {

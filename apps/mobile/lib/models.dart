@@ -83,6 +83,7 @@ class ProjectView {
 }
 
 class Board {
+  final String today; // AAAA-MM-DD
   final List<TaskView> shelf, cart, done;
   final List<SessionView> sessions;
   final List<SuggestionView> suggestions;
@@ -90,7 +91,8 @@ class Board {
   final int windowMinutes;
 
   Board.fromJson(Map<String, dynamic> j)
-      : shelf = _list(j['shelf'], TaskView.fromJson),
+      : today = j['today'],
+        shelf = _list(j['shelf'], TaskView.fromJson),
         cart = _list(j['cart'], TaskView.fromJson),
         done = _list(j['done'], TaskView.fromJson),
         sessions = _list(j['sessions'], SessionView.fromJson),
@@ -114,6 +116,17 @@ class HistoryView {
         date = j['date'],
         project = j['project'],
         agent = j['agent'];
+}
+
+/// Tamanho da estante e do carrinho no fim de um dia; um dia ausente repete o anterior.
+class StatusSnapshot {
+  final String date;
+  final int shelf, cart;
+
+  StatusSnapshot.fromJson(Map<String, dynamic> j)
+      : date = j['date'],
+        shelf = j['shelf'],
+        cart = j['cart'];
 }
 
 class Peer {

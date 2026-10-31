@@ -73,6 +73,11 @@ pub fn history() -> Result<String> {
   with_db(|db| json(&api::history(db)?))
 }
 
+/// Fotos diárias de estante/carrinho (`[{date, shelf, cart}]`), para os gráficos.
+pub fn status_snapshots() -> Result<String> {
+  with_db(|db| json(&api::status_snapshots(db)?))
+}
+
 pub fn add_project(name: String, policy: String) -> Result<i64> {
   with_db(|db| api::add_project(db, &name, &policy))
 }
