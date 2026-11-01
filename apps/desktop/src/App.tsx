@@ -576,56 +576,59 @@ function Sessions({ sessions, windowMinutes }: { sessions: SessionView[]; window
         <span className="hint">janela de {windowMinutes} min</span>
       </div>
 
-      {waiting.map((s) => (
-        <div key={s.session_id} className="attention">
-          <span className="dot" />
-          <div>
+      {/* Como nas colunas: a lista rola dentro do card, com o cabeçalho fixo. */}
+      <div className="panel-body">
+        {waiting.map((s) => (
+          <div key={s.session_id} className="attention">
+            <span className="dot" />
             <div>
-              <strong>{s.agent}</strong> está esperando você
-            </div>
-            <div className="small" title={s.cwd}>
-              {s.project ?? s.origin ?? "sem projeto"} · {s.last_seen_label}
-            </div>
-            <RemoteLink session={s} />
-          </div>
-        </div>
-      ))}
-
-      {groups.length === 0 && <p className="muted">Nenhuma sessão recente.</p>}
-      {groups.map(([name, list]) => (
-        <div key={name} className="session-group">
-          <div className="session-project">
-            {name ? (
-              <>
-                <ProjectDot name={name} />
-                {name}
-              </>
-            ) : (
-              "sem projeto"
-            )}
-          </div>
-          {list.map((s) => (
-            <div key={s.session_id} className={`session ${s.activity}`}>
-              <span className="dot" />
-              <div className="session-text">
-                <div>
-                  <strong>{s.agent}</strong> <span className="state">{s.activity_label}</span>
-                </div>
-                <div className="muted small">
-                  {s.task_id && s.task_title ? `em #${s.task_id} ${s.task_title} · ` : ""}
-                  {s.activity === "possibly_stopped" ? `último sinal ${s.last_seen_label}` : s.last_seen_label}
-                </div>
-                {s.origin && (
-                  <div className="muted small session-origin" title={s.cwd}>
-                    origem: {s.origin}
-                  </div>
-                )}
-                {s.activity !== "ended" && <RemoteLink session={s} />}
+              <div>
+                <strong>{s.agent}</strong> está esperando você
               </div>
+              <div className="small" title={s.cwd}>
+                {s.project ?? s.origin ?? "sem projeto"} · {s.last_seen_label}
+              </div>
+              <RemoteLink session={s} />
             </div>
-          ))}
-        </div>
-      ))}
+          </div>
+        ))}
+
+        {groups.length === 0 && <p className="muted">Nenhuma sessão recente.</p>}
+        {groups.map(([name, list]) => (
+          <div key={name} className="session-group">
+            <div className="session-project">
+              {name ? (
+                <>
+                  <ProjectDot name={name} />
+                  {name}
+                </>
+              ) : (
+                "sem projeto"
+              )}
+            </div>
+            {list.map((s) => (
+              <div key={s.session_id} className={`session ${s.activity}`}>
+                <span className="dot" />
+                <div className="session-text">
+                  <div>
+                    <strong>{s.agent}</strong> <span className="state">{s.activity_label}</span>
+                  </div>
+                  <div className="muted small">
+                    {s.task_id && s.task_title ? `em #${s.task_id} ${s.task_title} · ` : ""}
+                    {s.activity === "possibly_stopped" ? `último sinal ${s.last_seen_label}` : s.last_seen_label}
+                  </div>
+                  {s.origin && (
+                    <div className="muted small session-origin" title={s.cwd}>
+                      origem: {s.origin}
+                    </div>
+                  )}
+                  {s.activity !== "ended" && <RemoteLink session={s} />}
+                </div>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
     </section>
   );
 }
@@ -648,22 +651,24 @@ function Suggestions({ board, run }: { board: Board; run: Run }) {
         <h2>Sugestões</h2>
         <span className="count">{board.suggestions.length}</span>
       </div>
-      {board.suggestions.length === 0 && <p className="muted">Nada esperando você.</p>}
-      {board.suggestions.map((s) => (
-        <div key={s.id} className="suggestion">
-          <div>
-            <strong>{s.agent}</strong> propõe <strong>{s.summary}</strong> #{s.task_id} {s.task_title}
+      <div className="panel-body">
+        {board.suggestions.length === 0 && <p className="muted">Nada esperando você.</p>}
+        {board.suggestions.map((s) => (
+          <div key={s.id} className="suggestion">
+            <div>
+              <strong>{s.agent}</strong> propõe <strong>{s.summary}</strong> #{s.task_id} {s.task_title}
+            </div>
+            {s.reason && <div className="reason">“{s.reason}”</div>}
+            <div className="actions always">
+              <button className="primary" onClick={() => run(() => api.approve(s.id))}>
+                Aprovar
+              </button>
+              <button onClick={() => run(() => api.reject(s.id))}>Rejeitar</button>
+              <span className="muted small">{s.created_label}</span>
+            </div>
           </div>
-          {s.reason && <div className="reason">“{s.reason}”</div>}
-          <div className="actions always">
-            <button className="primary" onClick={() => run(() => api.approve(s.id))}>
-              Aprovar
-            </button>
-            <button onClick={() => run(() => api.reject(s.id))}>Rejeitar</button>
-            <span className="muted small">{s.created_label}</span>
-          </div>
-        </div>
-      ))}
+        ))}
+      </div>
     </section>
   );
 }

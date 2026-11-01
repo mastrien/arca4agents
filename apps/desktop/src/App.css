@@ -1868,8 +1868,21 @@ button.link-button:hover {
   padding: 4px 2px 4px 4px;
 }
 
+/* Corpo dos cards do painel lateral: mesma rolagem das colunas. */
+.panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  margin: -4px -6px -4px -4px;
+  padding: 4px 2px 4px 4px;
+}
+
 /* Telas estreitas (colunas empilhadas): cada coluna rola a partir de 70% da altura da janela. */
-.column-body {
+.column-body,
+.panel-body {
   max-height: 70vh;
 }
 
@@ -1908,17 +1921,27 @@ button.link-button:hover {
     flex: 0 1 auto;
   }
 
+  /* O painel lateral não rola inteiro: cada card (Agentes, Sugestões) encolhe até caber e rola a
+     própria lista, com a barra por dentro do card. */
   .app.board-view .side {
     min-height: 0;
-    overflow-y: auto;
-    scrollbar-gutter: stable;
+  }
+
+  .app.board-view .side > .panel {
+    flex: 0 1 auto;
+    min-height: 96px;
+  }
+
+  .app.board-view .panel-body {
+    max-height: none;
+    flex: 0 1 auto;
   }
 }
 
 /* ---------- Barras de rolagem discretas ----------
    8 px, polegar arredondado no tom das linhas do tema (claro e escuro), sem trilha e sem setas.
    Usa as regras ::-webkit-scrollbar (Chromium/WebView2) em vez de scrollbar-width/-color, que no
-   Windows ainda desenham as setas. Nas colunas e no painel lateral o polegar fica quase sumido e
+   Windows ainda desenham as setas. Nas colunas e nos cards do painel lateral o polegar fica quase sumido e
    ganha contraste com o mouse sobre a área. O espaço da barra continua reservado
    (scrollbar-gutter), então nada se mexe ao aparecer. */
 :root {
@@ -1958,19 +1981,19 @@ button.link-button:hover {
 }
 
 .column-body::-webkit-scrollbar-thumb,
-.side::-webkit-scrollbar-thumb {
+.panel-body::-webkit-scrollbar-thumb {
   background: var(--scroll-thumb-faint);
   background-clip: padding-box;
 }
 
 .column:hover .column-body::-webkit-scrollbar-thumb,
-.side:hover::-webkit-scrollbar-thumb {
+.panel:hover .panel-body::-webkit-scrollbar-thumb {
   background: var(--scroll-thumb);
   background-clip: padding-box;
 }
 
 .column:hover .column-body::-webkit-scrollbar-thumb:hover,
-.side:hover::-webkit-scrollbar-thumb:hover {
+.panel:hover .panel-body::-webkit-scrollbar-thumb:hover {
   background: var(--scroll-thumb-hover);
   background-clip: padding-box;
 }
