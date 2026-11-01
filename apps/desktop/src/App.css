@@ -1914,3 +1914,63 @@ button.link-button:hover {
     scrollbar-gutter: stable;
   }
 }
+
+/* ---------- Barras de rolagem discretas ----------
+   8 px, polegar arredondado no tom das linhas do tema (claro e escuro), sem trilha e sem setas.
+   Usa as regras ::-webkit-scrollbar (Chromium/WebView2) em vez de scrollbar-width/-color, que no
+   Windows ainda desenham as setas. Nas colunas e no painel lateral o polegar fica quase sumido e
+   ganha contraste com o mouse sobre a área. O espaço da barra continua reservado
+   (scrollbar-gutter), então nada se mexe ao aparecer. */
+:root {
+  --scroll-thumb: color-mix(in srgb, var(--muted) 45%, transparent);
+  --scroll-thumb-hover: color-mix(in srgb, var(--muted) 70%, transparent);
+  --scroll-thumb-faint: color-mix(in srgb, var(--muted) 20%, transparent);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* A borda transparente com background-clip deixa o polegar com 4 px de largura visível e 2 px de
+   respiro de cada lado. */
+::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll-thumb-hover);
+  background-clip: padding-box;
+}
+
+.column-body::-webkit-scrollbar-thumb,
+.side::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb-faint);
+  background-clip: padding-box;
+}
+
+.column:hover .column-body::-webkit-scrollbar-thumb,
+.side:hover::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  background-clip: padding-box;
+}
+
+.column:hover .column-body::-webkit-scrollbar-thumb:hover,
+.side:hover::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll-thumb-hover);
+  background-clip: padding-box;
+}
