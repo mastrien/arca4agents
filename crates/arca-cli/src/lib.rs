@@ -405,6 +405,14 @@ pub fn board(db: &Database, options: BoardOptions) -> Result<()> {
     println!("{}\n", render::project_summary(project));
   }
 
+  let mut upcoming_soon = arca_core::api::dates_overview(db, Some(arca_core::api::UPCOMING_SOON_DAYS))?.upcoming;
+  if let Some(project) = &project {
+    upcoming_soon.retain(|item| {
+      item.project.as_deref().is_some_and(|name| name.eq_ignore_ascii_case(&project.name))
+    });
+  }
+  render::render_upcoming_strip(&upcoming_soon);
+
   let (mut shelf, mut cart, mut done) = (Vec::new(), Vec::new(), Vec::new());
   let filter = TaskFilter { project_id: project.as_ref().map(|p| p.id), authors: options.authors };
   for task in db.get_tasks(filter)? {
@@ -585,6 +593,144 @@ pub fn sync_unpair(db: &Database, who: &str) -> Result<()> {
 pub fn sync_rotate_token(db: &Database) -> Result<()> {
   arca_core::sync::rotate_server_token(db)?;
   println!("Token trocado: os aparelhos pareados com este PC precisam parear de novo.");
+  Ok(())
+}
+
+// ---------- Aniversários ----------
+
+pub fn birthday_list(db: &Database, group: Option<&str>, by_date: bool) -> Result<()> {
+  let mut items = arca_core::api::birthdays(db)?;
+  if let Some(group) = group {
+    let target = group.trim().to_lowercase();
+    items.retain(|b| b.group.to_lowercase() == target);
+  }
+  render::render_birthdays(&items, by_date);
+  Ok(())
+}
+
+pub struct BirthdayAddOptions<'a> {
+  pub name: &'a str,
+  pub date: &'a str,
+  pub group: Option<&'a str>,
+  pub note: Option<&'a str>,
+}
+
+pub fn birthday_add(db: &Database, options: BirthdayAddOptions) -> Result<()> {
+  let (month, day, year) = dates::parse_birthday_date(options.date, dates::today())?;
+  let id = arca_core::api::add_birthday(db, &arca_core::api::BirthdayInput {
+    name: options.name.to_string(),
+    group: options.group.map(str::to_string),
+    month,
+    day,
+    year,
+    note: options.note.map(str::to_string),
+  })?;
+  let b = db.get_birthday(id)?;
+  println!("Aniversário #{id} de {} ({:02}/{:02}) adicionado ao grupo '{}'.", b.name, b.day, b.month, b.group);
+  Ok(())
+}
+
+pub struct BirthdayEditOptions<'a> {
+  pub name: Option<&'a str>,
+  pub date: Option<&'a str>,
+  pub group: Option<&'a str>,
+  pub year: Option<&'a str>,
+  pub note: Option<&'a str>,
+}
+
+fn parse_clearable_opt(value: Option<&str>) -> Option<String> {
+  value.map(|v| if v.eq_ignore_ascii_case("none") { String::new() } else { v.to_string() })
+}
+
+pub fn birthday_edit(db: &Database, id: i64, options: BirthdayEditOptions) -> Result<()> {
+  let parsed = options.date.map(|d| dates::parse_birthday_date(d, dates::today())).transpose()?;
+  let year = match options.year {
+    Some(v) if v.eq_ignore_ascii_case("none") => Some(0),
+    Some(v) => Some(v.parse::<i32>().with_context(|| format!("Ano inválido: '{v}'"))?),
+    None => parsed.and_then(|(_, _, y)| y),
+  };
+  arca_core::api::edit_birthday(db, id, &arca_core::api::BirthdayChanges {
+    name: options.name.map(str::to_string),
+    group: parse_clearable_opt(options.group),
+    month: parsed.map(|(m, _, _)| m),
+    day: parsed.map(|(_, d, _)| d),
+    year,
+    note: parse_clearable_opt(options.note),
+  })?;
+  println!("Aniversário #{id} atualizado.");
+  Ok(())
+}
+
+pub fn birthday_delete(db: &Database, id: i64) -> Result<()> {
+  let b = db.get_birthday(id)?;
+  arca_core::api::delete_birthday(db, id)?;
+  println!("Aniversário removido: {}", b.name);
+  Ok(())
+}
+
+// ---------- Datas ----------
+
+#[derive(Default)]
+pub struct DatesListOptions<'a> {
+  pub days: Option<i64>,
+  pub project: Option<&'a str>,
+  pub only_events: bool,
+}
+
+pub fn dates_list(db: &Database, options: DatesListOptions) -> Result<()> {
+  let mut items = arca_core::api::dates_overview(db, options.days)?.upcoming;
+  if options.only_events {
+    items.retain(|i| i.kind == arca_core::api::UpcomingKind::Event);
+  }
+  if let Some(proj) = options.project {
+    let target = proj.trim();
+    items.retain(|i| i.project.as_deref().is_some_and(|p| p.eq_ignore_ascii_case(target)));
+  }
+  render::render_upcoming(&items);
+  Ok(())
+}
+
+pub struct TrackedDateAddOptions<'a> {
+  pub title: &'a str,
+  pub date: &'a str,
+  pub project: Option<&'a str>,
+  pub note: Option<&'a str>,
+}
+
+pub fn dates_add(db: &Database, options: TrackedDateAddOptions) -> Result<()> {
+  let id = arca_core::api::add_tracked_date(db, &arca_core::api::TrackedDateInput {
+    title: options.title.to_string(),
+    date: options.date.to_string(),
+    project: options.project.map(str::to_string),
+    note: options.note.map(str::to_string),
+  })?;
+  let item = db.get_tracked_date(id)?;
+  println!("Data #{id} salva: {} ({})", item.title, item.target_date.format("%d/%m/%Y"));
+  Ok(())
+}
+
+pub struct TrackedDateEditOptions<'a> {
+  pub title: Option<&'a str>,
+  pub date: Option<&'a str>,
+  pub project: Option<&'a str>,
+  pub note: Option<&'a str>,
+}
+
+pub fn dates_edit(db: &Database, id: i64, options: TrackedDateEditOptions) -> Result<()> {
+  arca_core::api::edit_tracked_date(db, id, &arca_core::api::TrackedDateChanges {
+    title: options.title.map(str::to_string),
+    date: options.date.map(str::to_string),
+    project: parse_clearable_opt(options.project),
+    note: parse_clearable_opt(options.note),
+  })?;
+  println!("Data #{id} atualizada.");
+  Ok(())
+}
+
+pub fn dates_delete(db: &Database, id: i64) -> Result<()> {
+  let item = db.get_tracked_date(id)?;
+  arca_core::api::delete_tracked_date(db, id)?;
+  println!("Data removida: {}", item.title);
   Ok(())
 }
 

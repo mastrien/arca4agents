@@ -8,6 +8,32 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `json`, `with_db`
 
+Future<String> datesOverview({PlatformInt64? maxDays}) =>
+    RustLib.instance.api.crateApiArcaDatesOverview(maxDays: maxDays);
+
+Future<PlatformInt64> addBirthday({required String input}) =>
+    RustLib.instance.api.crateApiArcaAddBirthday(input: input);
+
+Future<void> editBirthday({
+  required PlatformInt64 id,
+  required String changes,
+}) => RustLib.instance.api.crateApiArcaEditBirthday(id: id, changes: changes);
+
+Future<void> deleteBirthday({required PlatformInt64 id}) =>
+    RustLib.instance.api.crateApiArcaDeleteBirthday(id: id);
+
+Future<PlatformInt64> addTrackedDate({required String input}) =>
+    RustLib.instance.api.crateApiArcaAddTrackedDate(input: input);
+
+Future<void> editTrackedDate({
+  required PlatformInt64 id,
+  required String changes,
+}) =>
+    RustLib.instance.api.crateApiArcaEditTrackedDate(id: id, changes: changes);
+
+Future<void> deleteTrackedDate({required PlatformInt64 id}) =>
+    RustLib.instance.api.crateApiArcaDeleteTrackedDate(id: id);
+
 /// Abre (ou cria) o banco no diretório de documentos do app. Chamar uma vez, no início.
 Future<String> openDatabase({required String path}) =>
     RustLib.instance.api.crateApiArcaOpenDatabase(path: path);

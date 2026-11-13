@@ -78,6 +78,30 @@ pub struct Tombstone {
   pub sync_clock: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BirthdayRow {
+  pub uuid: String,
+  pub name: String,
+  pub group: String,
+  pub month: u32,
+  pub day: u32,
+  pub year: Option<i32>,
+  pub note: Option<String>,
+  pub created_at: Option<String>,
+  pub sync_clock: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrackedDateRow {
+  pub uuid: String,
+  pub title: String,
+  pub target_date: String,
+  pub project_uuid: Option<String>,
+  pub note: Option<String>,
+  pub created_at: Option<String>,
+  pub sync_clock: String,
+}
+
 /// Sessões de agentes viajam só do PC para o celular, para leitura.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionRow {
@@ -110,13 +134,17 @@ pub struct ChangeSet {
   /// `default`: versões anteriores não mandam o campo.
   #[serde(default)]
   pub usage: Vec<crate::usage::UsageSample>,
+  #[serde(default)]
+  pub birthdays: Vec<BirthdayRow>,
+  #[serde(default)]
+  pub tracked_dates: Vec<TrackedDateRow>,
 }
 
 impl ChangeSet {
   pub fn is_empty(&self) -> bool {
     self.projects.is_empty() && self.tasks.is_empty() && self.history.is_empty()
       && self.suggestions.is_empty() && self.tombstones.is_empty() && self.sessions.is_empty()
-      && self.usage.is_empty()
+      && self.usage.is_empty() && self.birthdays.is_empty() && self.tracked_dates.is_empty()
   }
 }
 
@@ -200,6 +228,31 @@ pub fn changes_since(db: &Database, since: &str, exclude_device: Option<&str>, i
   }
 
   let mut stmt = conn.prepare(
+    "SELECT uuid, person_name, group_name, birth_month, birth_day, birth_year, note, created_at, sync_clock
+      FROM birthdays WHERE sync_clock > ?1 ORDER BY sync_clock",
+  )?;
+  for row in stmt.query_map(params![since], |r| Ok(BirthdayRow {
+    uuid: r.get(0)?, name: r.get(1)?, group: r.get(2)?, month: r.get(3)?, day: r.get(4)?,
+    year: r.get(5)?, note: r.get(6)?, created_at: r.get(7)?, sync_clock: r.get(8)?,
+  }))? {
+    let row = row?;
+    if keep(&row.sync_clock) { set.birthdays.push(row); }
+  }
+
+  let mut stmt = conn.prepare(
+    "SELECT d.uuid, d.title, d.target_date, p.uuid, d.note, d.created_at, d.sync_clock
+      FROM tracked_dates d LEFT JOIN projects p ON p.project_id = d.project_id
+      WHERE d.sync_clock > ?1 ORDER BY d.sync_clock",
+  )?;
+  for row in stmt.query_map(params![since], |r| Ok(TrackedDateRow {
+    uuid: r.get(0)?, title: r.get(1)?, target_date: r.get(2)?, project_uuid: r.get(3)?,
+    note: r.get(4)?, created_at: r.get(5)?, sync_clock: r.get(6)?,
+  }))? {
+    let row = row?;
+    if keep(&row.sync_clock) { set.tracked_dates.push(row); }
+  }
+
+  let mut stmt = conn.prepare(
     "SELECT entity, uuid, sync_clock FROM sync_tombstones WHERE sync_clock > ?1 ORDER BY sync_clock",
   )?;
   for row in stmt.query_map(params![since], |r| Ok(Tombstone { entity: r.get(0)?, uuid: r.get(1)?, sync_clock: r.get(2)? }))? {
@@ -231,6 +284,8 @@ fn local_clock(conn: &Connection, table: &str, uuid: &str) -> Result<Option<(i64
     "tasks" => "task_id",
     "task_history" => "task_history_id",
     "suggestions" => "suggestion_id",
+    "birthdays" => "birthday_id",
+    "tracked_dates" => "date_id",
     other => anyhow::bail!("tabela desconhecida: {other}"),
   };
   Ok(conn.query_row(
@@ -387,12 +442,64 @@ pub fn apply(db: &Database, set: &ChangeSet, accept_sessions: bool) -> Result<Ap
     count(applied);
   }
 
+  for row in &set.birthdays {
+    let applied = match local_clock(&tx, "birthdays", &row.uuid)? {
+      Some((_, clock)) if clock >= row.sync_clock => false,
+      Some((id, _)) => {
+        tx.execute(
+          "UPDATE birthdays SET person_name = ?1, group_name = ?2, birth_month = ?3, birth_day = ?4,
+              birth_year = ?5, note = ?6, sync_clock = ?7
+            WHERE birthday_id = ?8",
+          params![row.name, row.group, row.month, row.day, row.year, row.note, row.sync_clock, id],
+        )?;
+        true
+      }
+      None if deleted_after(&tx, "birthday", &row.uuid, &row.sync_clock)? => false,
+      None => {
+        tx.execute(
+          "INSERT INTO birthdays (person_name, group_name, birth_month, birth_day, birth_year, note, created_at, uuid, sync_clock)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, COALESCE(?7, DATETIME('now', 'localtime')), ?8, ?9)",
+          params![row.name, row.group, row.month, row.day, row.year, row.note, row.created_at, row.uuid, row.sync_clock],
+        )?;
+        true
+      }
+    };
+    count(applied);
+  }
+
+  for row in &set.tracked_dates {
+    let project_id = local_id(&tx, "projects", "project_id", row.project_uuid.as_deref())?;
+    let applied = match local_clock(&tx, "tracked_dates", &row.uuid)? {
+      Some((_, clock)) if clock >= row.sync_clock => false,
+      Some((id, _)) => {
+        tx.execute(
+          "UPDATE tracked_dates SET title = ?1, target_date = ?2, project_id = ?3, note = ?4, sync_clock = ?5
+            WHERE date_id = ?6",
+          params![row.title, row.target_date, project_id, row.note, row.sync_clock, id],
+        )?;
+        true
+      }
+      None if deleted_after(&tx, "tracked_date", &row.uuid, &row.sync_clock)? => false,
+      None => {
+        tx.execute(
+          "INSERT INTO tracked_dates (title, target_date, project_id, note, created_at, uuid, sync_clock)
+            VALUES (?1, ?2, ?3, ?4, COALESCE(?5, DATETIME('now', 'localtime')), ?6, ?7)",
+          params![row.title, row.target_date, project_id, row.note, row.created_at, row.uuid, row.sync_clock],
+        )?;
+        true
+      }
+    };
+    count(applied);
+  }
+
   for tombstone in &set.tombstones {
     let table = match tombstone.entity.as_str() {
       "project" => "projects",
       "task" => "tasks",
       "history" => "task_history",
       "suggestion" => "suggestions",
+      "birthday" => "birthdays",
+      "tracked_date" => "tracked_dates",
       _ => continue,
     };
     // Uma edição local depois da exclusão remota vence: a linha fica (e volta para o outro lado).
@@ -402,6 +509,8 @@ pub fn apply(db: &Database, set: &ChangeSet, accept_sessions: bool) -> Result<Ap
           "projects" => "project_id",
           "tasks" => "task_id",
           "task_history" => "task_history_id",
+          "birthdays" => "birthday_id",
+          "tracked_dates" => "date_id",
           _ => "suggestion_id",
         };
         tx.execute(&format!("DELETE FROM {table} WHERE {pk} = ?1"), params![id])?;
@@ -687,5 +796,61 @@ mod tests {
     let peer = peers(&db).unwrap().remove(0);
     assert_eq!((peer.last_pulled.as_str(), peer.last_pushed.as_str()), ("a", "b"));
     assert!(update_peer_cursors(&db, "outro", "a", "b").is_err());
+  }
+
+  #[test]
+  fn birthdays_and_tracked_dates_sync_both_ways() {
+    use crate::persistence::{BirthdayEdit, NewBirthday, NewTrackedDate, TrackedDateEdit};
+    use chrono::NaiveDate;
+
+    let pc = Database::open_in_memory().unwrap();
+    let phone = Database::open_in_memory().unwrap();
+    let mut cursors = Cursors::default();
+
+    let proj = pc.add_project("viagem", Policy::Own).unwrap();
+    let b_id = pc.add_birthday(NewBirthday {
+      name: "Ana",
+      group: "Família",
+      month: 4,
+      day: 12,
+      year: Some(1992),
+      note: Some("bolo de chocolate"),
+    }).unwrap();
+    let d_id = pc.add_tracked_date(NewTrackedDate {
+      title: "Passaporte",
+      target_date: NaiveDate::from_ymd_opt(2026, 12, 20).unwrap(),
+      project_id: Some(proj),
+      note: None,
+    }).unwrap();
+
+    sync(&phone, &pc, &mut cursors);
+    let phone_b = phone.get_birthdays().unwrap();
+    let phone_d = phone.get_tracked_dates(None).unwrap();
+    assert_eq!(phone_b.len(), 1);
+    assert_eq!(phone_b[0].group, "Família");
+    assert_eq!(phone_d.len(), 1);
+    assert_eq!(phone_d[0].project_name.as_deref(), Some("viagem"));
+
+    // Edição no celular e exclusão no PC convergem.
+    phone.edit_birthday(phone_b[0].id, BirthdayEdit {
+      group: Some("Trabalho"),
+      note: Some(Some("alergia a nozes")),
+      ..Default::default()
+    }).unwrap();
+    phone.edit_tracked_date(phone_d[0].id, TrackedDateEdit {
+      title: Some("Renovar passaporte"),
+      ..Default::default()
+    }).unwrap();
+    pc.delete_birthday(b_id).unwrap();
+
+    sync(&phone, &pc, &mut cursors);
+    // Edição no celular é posterior à exclusão no PC ou ambas passam pelo cursor; verifica convergência dos dois lados.
+    assert_eq!(pc.get_birthdays().unwrap().len(), phone.get_birthdays().unwrap().len());
+    assert_eq!(pc.get_tracked_date(d_id).unwrap().title, "Renovar passaporte");
+
+    phone.delete_tracked_date(phone_d[0].id).unwrap();
+    sync(&phone, &pc, &mut cursors);
+    assert!(pc.get_tracked_dates(None).unwrap().is_empty());
+    assert!(phone.get_tracked_dates(None).unwrap().is_empty());
   }
 }

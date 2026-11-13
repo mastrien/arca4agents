@@ -5,7 +5,42 @@
 use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result};
-use arca_core::api::{self, BoardFilter, ProjectChanges, TaskChanges, TaskInput};
+use arca_core::api::{
+  self, BirthdayChanges, BirthdayInput, BoardFilter, ProjectChanges, TaskChanges, TaskInput, TrackedDateChanges,
+  TrackedDateInput,
+};
+
+pub fn dates_overview(max_days: Option<i64>) -> Result<String> {
+  with_db(|db| json(&api::dates_overview(db, max_days)?))
+}
+
+pub fn add_birthday(input: String) -> Result<i64> {
+  let input: BirthdayInput = serde_json::from_str(&input)?;
+  with_db(|db| api::add_birthday(db, &input))
+}
+
+pub fn edit_birthday(id: i64, changes: String) -> Result<()> {
+  let changes: BirthdayChanges = serde_json::from_str(&changes)?;
+  with_db(|db| api::edit_birthday(db, id, &changes))
+}
+
+pub fn delete_birthday(id: i64) -> Result<()> {
+  with_db(|db| api::delete_birthday(db, id))
+}
+
+pub fn add_tracked_date(input: String) -> Result<i64> {
+  let input: TrackedDateInput = serde_json::from_str(&input)?;
+  with_db(|db| api::add_tracked_date(db, &input))
+}
+
+pub fn edit_tracked_date(id: i64, changes: String) -> Result<()> {
+  let changes: TrackedDateChanges = serde_json::from_str(&changes)?;
+  with_db(|db| api::edit_tracked_date(db, id, &changes))
+}
+
+pub fn delete_tracked_date(id: i64) -> Result<()> {
+  with_db(|db| api::delete_tracked_date(db, id))
+}
 use arca_core::net::{client, Pairing};
 use arca_core::persistence::Database;
 use arca_core::sync;

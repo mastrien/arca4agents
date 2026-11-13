@@ -91,12 +91,85 @@ class ProjectView {
         done = j['done'];
 }
 
+class UpcomingItemView {
+  final int id;
+  final String kind; // 'event' | 'task' | 'birthday'
+  final String title;
+  final String date;
+  final String dateLabel;
+  final int daysUntil;
+  final String dueLabel;
+  final String dueState; // 'overdue' | 'today' | 'upcoming'
+  final String? project;
+  final String? group;
+  final String? note;
+  final String? taskStatus;
+  final int? turningAge;
+
+  UpcomingItemView.fromJson(Map<String, dynamic> j)
+      : id = j['id'],
+        kind = j['kind'],
+        title = j['title'],
+        date = j['date'],
+        dateLabel = j['date_label'],
+        daysUntil = j['days_until'],
+        dueLabel = j['due_label'],
+        dueState = j['due_state'],
+        project = j['project'],
+        group = j['group'],
+        note = j['note'],
+        taskStatus = j['task_status'],
+        turningAge = j['turning_age'];
+}
+
+class BirthdayView {
+  final int id;
+  final String name;
+  final String group;
+  final int month, day;
+  final int? year;
+  final String? note;
+  final String dateLabel;
+  final String nextDate;
+  final int daysUntil;
+  final String dueLabel;
+  final String dueState;
+  final int? turningAge;
+
+  BirthdayView.fromJson(Map<String, dynamic> j)
+      : id = j['id'],
+        name = j['name'],
+        group = j['group'],
+        month = j['month'],
+        day = j['day'],
+        year = j['year'],
+        note = j['note'],
+        dateLabel = j['date_label'],
+        nextDate = j['next_date'],
+        daysUntil = j['days_until'],
+        dueLabel = j['due_label'],
+        dueState = j['due_state'],
+        turningAge = j['turning_age'];
+}
+
+class DatesOverview {
+  final String today;
+  final List<UpcomingItemView> upcoming;
+  final List<BirthdayView> birthdays;
+
+  DatesOverview.fromJson(Map<String, dynamic> j)
+      : today = j['today'],
+        upcoming = _list(j['upcoming'], UpcomingItemView.fromJson),
+        birthdays = _list(j['birthdays'], BirthdayView.fromJson);
+}
+
 class Board {
   final String today; // AAAA-MM-DD
   final List<TaskView> shelf, cart, done;
   final List<SessionView> sessions;
   final List<SuggestionView> suggestions;
   final List<ProjectView> projects;
+  final List<UpcomingItemView> upcomingSoon;
   final int windowMinutes;
 
   Board.fromJson(Map<String, dynamic> j)
@@ -107,6 +180,7 @@ class Board {
         sessions = _list(j['sessions'], SessionView.fromJson),
         suggestions = _list(j['suggestions'], SuggestionView.fromJson),
         projects = _list(j['projects'], ProjectView.fromJson),
+        upcomingSoon = j['upcoming_soon'] == null ? const [] : _list(j['upcoming_soon'], UpcomingItemView.fromJson),
         windowMinutes = j['window_minutes'] ?? 10;
 
   List<TaskView> tasks(String status) => switch (status) { 'SHELF' => shelf, 'CART' => cart, _ => done };

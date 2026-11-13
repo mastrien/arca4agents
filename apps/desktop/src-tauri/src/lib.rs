@@ -7,7 +7,45 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use arca_core::api::{self, Board, BoardFilter, HistoryView, ProjectChanges, StatusSnapshotView, TaskChanges, TaskInput};
+use arca_core::api::{
+  self, BirthdayChanges, BirthdayInput, Board, BoardFilter, DatesOverview, HistoryView, ProjectChanges,
+  StatusSnapshotView, TaskChanges, TaskInput, TrackedDateChanges, TrackedDateInput,
+};
+
+#[tauri::command]
+fn dates_overview(state: tauri::State<'_, AppState>, max_days: Option<i64>) -> Result<DatesOverview, String> {
+  state.with_db(|db| api::dates_overview(db, max_days))
+}
+
+#[tauri::command]
+fn add_birthday(state: tauri::State<'_, AppState>, input: BirthdayInput) -> Result<i64, String> {
+  state.with_db(|db| api::add_birthday(db, &input))
+}
+
+#[tauri::command]
+fn edit_birthday(state: tauri::State<'_, AppState>, id: i64, changes: BirthdayChanges) -> Result<(), String> {
+  state.with_db(|db| api::edit_birthday(db, id, &changes))
+}
+
+#[tauri::command]
+fn delete_birthday(state: tauri::State<'_, AppState>, id: i64) -> Result<(), String> {
+  state.with_db(|db| api::delete_birthday(db, id))
+}
+
+#[tauri::command]
+fn add_tracked_date(state: tauri::State<'_, AppState>, input: TrackedDateInput) -> Result<i64, String> {
+  state.with_db(|db| api::add_tracked_date(db, &input))
+}
+
+#[tauri::command]
+fn edit_tracked_date(state: tauri::State<'_, AppState>, id: i64, changes: TrackedDateChanges) -> Result<(), String> {
+  state.with_db(|db| api::edit_tracked_date(db, id, &changes))
+}
+
+#[tauri::command]
+fn delete_tracked_date(state: tauri::State<'_, AppState>, id: i64) -> Result<(), String> {
+  state.with_db(|db| api::delete_tracked_date(db, id))
+}
 use arca_core::net::{self, server};
 use arca_core::persistence::Database;
 use arca_core::usage::{self, UsageSample};
@@ -332,6 +370,8 @@ pub fn run() {
       status_snapshots, usage_samples, refresh_codex_usage,
       add_project, edit_project, delete_project, link_folder, unlink_folder,
       sync_status, set_sync_enabled, pairing, rotate_token,
+      dates_overview, add_birthday, edit_birthday, delete_birthday,
+      add_tracked_date, edit_tracked_date, delete_tracked_date,
     ])
     .run(tauri::generate_context!())
     .expect("erro ao iniciar o app");

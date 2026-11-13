@@ -121,8 +121,17 @@ class TasksScreen extends StatelessWidget {
   final String list;
   final ValueChanged<String> onList;
   final VoidCallback onAttention;
+  final VoidCallback onOpenDates;
 
-  const TasksScreen({super.key, required this.store, required this.board, required this.list, required this.onList, required this.onAttention});
+  const TasksScreen({
+    super.key,
+    required this.store,
+    required this.board,
+    required this.list,
+    required this.onList,
+    required this.onAttention,
+    required this.onOpenDates,
+  });
 
   static const _lists = [('SHELF', 'Estante'), ('CART', 'Carrinho'), ('DONE', 'Feito')];
 
@@ -178,6 +187,11 @@ class TasksScreen extends StatelessWidget {
               ),
             ),
           ),
+        ),
+      if (board.upcomingSoon.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          child: _UpcomingStrip(items: board.upcomingSoon, onTap: onOpenDates),
         ),
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1259,4 +1273,827 @@ void openProjects(BuildContext context, ArcaStore store) {
           );
         },
       )));
+}
+
+// ---------- Datas e Aniversários ----------
+
+Color _upcomingDueColor(BuildContext context, String dueState) {
+  final c = context.arca;
+  return switch (dueState) {
+    'overdue' => Theme.of(context).colorScheme.error,
+    'today' => c.attention,
+    _ => c.muted,
+  };
+}
+
+class _UpcomingStrip extends StatelessWidget {
+  final List<UpcomingItemView> items;
+  final VoidCallback onTap;
+
+  const _UpcomingStrip({required this.items, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.arca;
+    final hasUrgent = items.any((i) => i.dueState == 'overdue' || i.dueState == 'today');
+    final shown = items.take(3).toList();
+    final rest = items.length - shown.length;
+
+    return Material(
+      color: c.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: hasUrgent ? c.attentionDot.withValues(alpha: 0.45) : c.line),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+          child: Row(children: [
+            Icon(Icons.event_outlined, size: 17, color: hasUrgent ? c.attention : c.accent),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  for (final item in shown)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: item.dueState == 'overdue'
+                            ? Theme.of(context).colorScheme.error.withValues(alpha: 0.1)
+                            : item.dueState == 'today'
+                                ? c.attentionTint
+                                : c.recessed,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text.rich(
+                        TextSpan(children: [
+                          TextSpan(text: item.title, style: const TextStyle(fontWeight: FontWeight.w500)),
+                          TextSpan(
+                            text: ' · ${item.dueLabel}',
+                            style: TextStyle(color: _upcomingDueColor(context, item.dueState)),
+                          ),
+                        ]),
+                        style: const TextStyle(fontSize: 12),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  if (rest > 0)
+                    Text('+$rest', style: TextStyle(fontSize: 12, color: c.muted, fontWeight: FontWeight.w600)),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right, size: 18, color: c.muted),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+class DatesScreen extends StatefulWidget {
+  final ArcaStore store;
+  final Board board;
+  final String tab;
+  final ValueChanged<String> onTab;
+
+  const DatesScreen({
+    super.key,
+    required this.store,
+    required this.board,
+    required this.tab,
+    required this.onTab,
+  });
+
+  @override
+  State<DatesScreen> createState() => _DatesScreenState();
+}
+
+class _DatesScreenState extends State<DatesScreen> {
+  int? _horizonDays;
+  String _kindFilter = 'all';
+  String _groupFilter = '';
+  bool _byDate = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.arca;
+    final overview = widget.store.dates;
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 6, 10),
+        child: Row(children: [
+          const Text('Datas', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
+          const Spacer(),
+          _SyncButton(store: widget.store),
+        ]),
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        child: Container(
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(color: c.recessed, borderRadius: BorderRadius.circular(12)),
+          child: Row(children: [
+            for (final (key, label) in [('upcoming', 'Próximas datas'), ('birthdays', 'Aniversários')])
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => widget.onTab(key),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    height: 38,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: widget.tab == key ? c.surface : Colors.transparent,
+                      borderRadius: BorderRadius.circular(9),
+                      boxShadow: widget.tab == key
+                          ? [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 2, offset: const Offset(0, 1))]
+                          : null,
+                    ),
+                    child: Text(
+                      label,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: widget.tab == key ? FontWeight.w600 : FontWeight.w500,
+                        color: widget.tab == key ? c.text : c.muted,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ]),
+        ),
+      ),
+      Expanded(
+        child: overview == null
+            ? const Center(child: CircularProgressIndicator())
+            : widget.tab == 'upcoming'
+                ? _buildUpcoming(context, overview)
+                : _buildBirthdays(context, overview),
+      ),
+    ]);
+  }
+
+  Widget _buildUpcoming(BuildContext context, DatesOverview overview) {
+    final c = context.arca;
+    final filtered = overview.upcoming.where((item) {
+      if (_horizonDays != null && item.daysUntil > _horizonDays!) return false;
+      if (_kindFilter != 'all' && item.kind != _kindFilter) return false;
+      return true;
+    }).toList();
+
+    final buckets = <(String, bool Function(int))>[
+      ('ATRASADOS', (d) => d < 0),
+      ('HOJE', (d) => d == 0),
+      ('PRÓXIMOS 7 DIAS', (d) => d >= 1 && d <= 7),
+      ('ESTE MÊS', (d) => d >= 8 && d <= 30),
+      ('MAIS ADIANTE', (d) => d > 30),
+    ];
+
+    final sections = [
+      for (final (title, pred) in buckets)
+        if (filtered.any((i) => pred(i.daysUntil)))
+          (title, filtered.where((i) => pred(i.daysUntil)).toList()),
+    ];
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 96),
+      children: [
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(children: [
+            for (final (days, label) in [(null, 'Tudo'), (7, 'Até 7d'), (30, 'Até 30d'), (90, 'Até 90d')]) ...[
+              _SmallChip(
+                label: label,
+                selected: _horizonDays == days,
+                onTap: () => setState(() => _horizonDays = days),
+              ),
+              const SizedBox(width: 6),
+            ],
+            const SizedBox(width: 6),
+            for (final (kind, label) in [('all', 'Todos'), ('event', 'Eventos'), ('task', 'Tarefas'), ('birthday', 'Aniv.')]) ...[
+              _SmallChip(
+                label: label,
+                selected: _kindFilter == kind,
+                onTap: () => setState(() => _kindFilter = kind),
+              ),
+              const SizedBox(width: 6),
+            ],
+          ]),
+        ),
+        const SizedBox(height: 12),
+        if (sections.isEmpty)
+          Panel(
+            padding: const EdgeInsets.all(20),
+            child: Text(
+              'Nenhuma data próxima nesse filtro. Use + para cadastrar um evento.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: c.muted, fontSize: 13),
+            ),
+          )
+        else
+          for (final (title, items) in sections) ...[
+            Padding(
+              padding: const EdgeInsets.only(top: 6, bottom: 6, left: 4),
+              child: Text(
+                '$title (${items.length})',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.6, color: c.muted),
+              ),
+            ),
+            Panel(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Column(children: [
+                for (var i = 0; i < items.length; i++) ...[
+                  if (i > 0) Divider(height: 1, color: c.lineSoft),
+                  _UpcomingRow(
+                    item: items[i],
+                    onTap: () {
+                      final item = items[i];
+                      if (item.kind == 'event') {
+                        showTrackedDateSheet(context, widget.store, existing: item);
+                      } else if (item.kind == 'birthday') {
+                        final b = overview.birthdays.where((x) => x.id == item.id).firstOrNull;
+                        if (b != null) showBirthdaySheet(context, widget.store, existing: b);
+                      }
+                    },
+                    onCompleteTask: items[i].kind == 'task'
+                        ? () => widget.store.moveTask(items[i].id, 'DONE')
+                        : null,
+                  ),
+                ],
+              ]),
+            ),
+            const SizedBox(height: 8),
+          ],
+      ],
+    );
+  }
+
+  Widget _buildBirthdays(BuildContext context, DatesOverview overview) {
+    final c = context.arca;
+    final counts = <String, int>{};
+    for (final b in overview.birthdays) {
+      counts[b.group] = (counts[b.group] ?? 0) + 1;
+    }
+    final groups = counts.entries.toList()..sort((a, b) => a.key.compareTo(b.key));
+    final visible = _groupFilter.isEmpty
+        ? overview.birthdays
+        : overview.birthdays.where((b) => b.group == _groupFilter).toList();
+
+    final byGroup = <String, List<BirthdayView>>{};
+    for (final b in visible) {
+      byGroup.putIfAbsent(b.group, () => []).add(b);
+    }
+    final groupSections = byGroup.entries.toList()..sort((a, b) => a.key.compareTo(b.key));
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 96),
+      children: [
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(children: [
+            _SmallChip(
+              label: 'Todos (${overview.birthdays.length})',
+              selected: _groupFilter.isEmpty,
+              onTap: () => setState(() => _groupFilter = ''),
+            ),
+            for (final entry in groups) ...[
+              const SizedBox(width: 6),
+              _SmallChip(
+                label: '${entry.key} (${entry.value})',
+                selected: _groupFilter == entry.key,
+                onTap: () => setState(() => _groupFilter = entry.key),
+              ),
+            ],
+          ]),
+        ),
+        const SizedBox(height: 10),
+        Row(children: [
+          _SmallChip(
+            label: 'Por grupo',
+            selected: !_byDate,
+            onTap: () => setState(() => _byDate = false),
+          ),
+          const SizedBox(width: 6),
+          _SmallChip(
+            label: 'Por proximidade',
+            selected: _byDate,
+            onTap: () => setState(() => _byDate = true),
+          ),
+        ]),
+        const SizedBox(height: 12),
+        if (visible.isEmpty)
+          Panel(
+            padding: const EdgeInsets.all(20),
+            child: Text(
+              'Nenhum aniversário cadastrado. Use + para adicionar.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: c.muted, fontSize: 13),
+            ),
+          )
+        else if (_byDate)
+          Panel(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Column(children: [
+              for (var i = 0; i < visible.length; i++) ...[
+                if (i > 0) Divider(height: 1, color: c.lineSoft),
+                _BirthdayRow(
+                  item: visible[i],
+                  showGroup: true,
+                  onTap: () => showBirthdaySheet(context, widget.store, existing: visible[i]),
+                ),
+              ],
+            ]),
+          )
+        else
+          for (final entry in groupSections) ...[
+            Padding(
+              padding: const EdgeInsets.only(top: 6, bottom: 6, left: 4),
+              child: Text(
+                '${entry.key.toUpperCase()} (${entry.value.length})',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.6, color: c.muted),
+              ),
+            ),
+            Panel(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Column(children: [
+                for (var i = 0; i < entry.value.length; i++) ...[
+                  if (i > 0) Divider(height: 1, color: c.lineSoft),
+                  _BirthdayRow(
+                    item: entry.value[i],
+                    showGroup: false,
+                    onTap: () => showBirthdaySheet(context, widget.store, existing: entry.value[i]),
+                  ),
+                ],
+              ]),
+            ),
+            const SizedBox(height: 8),
+          ],
+      ],
+    );
+  }
+}
+
+class _SmallChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _SmallChip({required this.label, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.arca;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? c.accentTint : c.surface,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: selected ? c.accentLine : c.line),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+            color: selected ? c.accent : c.muted,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _UpcomingRow extends StatelessWidget {
+  final UpcomingItemView item;
+  final VoidCallback onTap;
+  final VoidCallback? onCompleteTask;
+
+  const _UpcomingRow({required this.item, required this.onTap, this.onCompleteTask});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.arca;
+    final (badgeText, badgeColor, badgeBg) = switch (item.kind) {
+      'event' => ('Evento', c.agent, c.agentTint),
+      'task' => ('Tarefa', c.accent, c.accentTint),
+      _ => ('Aniv.', const Color(0xFFA82B76), const Color(0xFFA82B76).withValues(alpha: 0.12)),
+    };
+
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 11, 10, 11),
+        child: Row(children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+            decoration: BoxDecoration(color: badgeBg, borderRadius: BorderRadius.circular(6)),
+            child: Text(badgeText, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: badgeColor)),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(item.title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+              if (item.project != null || item.group != null || item.turningAge != null || item.note != null) ...[
+                const SizedBox(height: 3),
+                Wrap(spacing: 8, runSpacing: 2, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                  if (item.project != null)
+                    Row(mainAxisSize: MainAxisSize.min, children: [
+                      ProjectDot(item.project!, size: 7),
+                      const SizedBox(width: 4),
+                      Text(item.project!, style: TextStyle(fontSize: 12, color: c.muted)),
+                    ]),
+                  if (item.group != null) Text(item.group!, style: TextStyle(fontSize: 12, color: c.muted)),
+                  if (item.turningAge != null)
+                    Text('faz ${item.turningAge} anos', style: TextStyle(fontSize: 12, color: c.muted)),
+                  if (item.note != null) Text(item.note!, style: TextStyle(fontSize: 12, color: c.muted)),
+                ]),
+              ],
+            ]),
+          ),
+          const SizedBox(width: 8),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Text(item.dateLabel, style: TextStyle(fontSize: 12, fontFamily: mono, color: c.muted)),
+            Text(
+              item.dueLabel,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: item.dueState == 'overdue' || item.dueState == 'today' ? FontWeight.w600 : FontWeight.w400,
+                color: _upcomingDueColor(context, item.dueState),
+              ),
+            ),
+          ]),
+          if (onCompleteTask != null) ...[
+            const SizedBox(width: 4),
+            IconButton(
+              tooltip: 'Concluir tarefa',
+              onPressed: onCompleteTask,
+              icon: Icon(Icons.check_circle_outline, size: 20, color: c.accent),
+            ),
+          ],
+        ]),
+      ),
+    );
+  }
+}
+
+class _BirthdayRow extends StatelessWidget {
+  final BirthdayView item;
+  final bool showGroup;
+  final VoidCallback onTap;
+
+  const _BirthdayRow({required this.item, required this.showGroup, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.arca;
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
+        child: Row(children: [
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Flexible(
+                  child: Text(item.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+                ),
+                if (showGroup) ...[
+                  const SizedBox(width: 8),
+                  Text(item.group, style: TextStyle(fontSize: 12, color: c.muted)),
+                ],
+              ]),
+              if (item.turningAge != null || item.note != null) ...[
+                const SizedBox(height: 2),
+                Text(
+                  [
+                    if (item.turningAge != null) 'faz ${item.turningAge} anos',
+                    if (item.note != null) item.note!,
+                  ].join(' · '),
+                  style: TextStyle(fontSize: 12, color: c.muted),
+                ),
+              ],
+            ]),
+          ),
+          const SizedBox(width: 8),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Text(item.dateLabel, style: TextStyle(fontSize: 12, fontFamily: mono, color: c.muted)),
+            Text(
+              item.dueLabel,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: item.dueState == 'today' ? FontWeight.w600 : FontWeight.w400,
+                color: _upcomingDueColor(context, item.dueState),
+              ),
+            ),
+          ]),
+        ]),
+      ),
+    );
+  }
+}
+
+({int month, int day, int? year})? _parseBirthdayDate(String raw) {
+  final s = raw.trim();
+  final dmy = RegExp(r'^(\d{1,2})/(\d{1,2})(?:/(\d{4}))?$').firstMatch(s);
+  if (dmy != null) {
+    return (
+      day: int.parse(dmy.group(1)!),
+      month: int.parse(dmy.group(2)!),
+      year: dmy.group(3) != null ? int.parse(dmy.group(3)!) : null,
+    );
+  }
+  final ymd = RegExp(r'^(\d{4})-(\d{1,2})-(\d{1,2})$').firstMatch(s);
+  if (ymd != null) {
+    return (
+      year: int.parse(ymd.group(1)!),
+      month: int.parse(ymd.group(2)!),
+      day: int.parse(ymd.group(3)!),
+    );
+  }
+  return null;
+}
+
+Future<void> showBirthdaySheet(BuildContext context, ArcaStore store, {BirthdayView? existing}) {
+  final nameCtrl = TextEditingController(text: existing?.name ?? '');
+  final dateCtrl = TextEditingController(text: existing?.dateLabel ?? '');
+  final groupCtrl = TextEditingController(text: existing?.group ?? '');
+  final noteCtrl = TextEditingController(text: existing?.note ?? '');
+  final knownGroups = (store.dates?.birthdays.map((b) => b.group).toSet().toList() ?? <String>[])..sort();
+
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    builder: (ctx) {
+      String? localError;
+      bool busy = false;
+      return StatefulBuilder(builder: (ctx, setSheetState) {
+        final c = ctx.arca;
+        return Padding(
+          padding: EdgeInsets.fromLTRB(20, 18, 20, MediaQuery.viewInsetsOf(ctx).bottom + 20),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  existing == null ? 'Novo aniversário' : 'Editar aniversário',
+                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 12),
+                if (localError != null) ...[
+                  Text(localError!, style: TextStyle(color: Theme.of(ctx).colorScheme.error, fontSize: 13)),
+                  const SizedBox(height: 8),
+                ],
+                TextField(
+                  controller: nameCtrl,
+                  autofocus: existing == null,
+                  decoration: const InputDecoration(labelText: 'Nome'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: dateCtrl,
+                  keyboardType: TextInputType.datetime,
+                  decoration: const InputDecoration(
+                    labelText: 'Data',
+                    hintText: 'DD/MM ou DD/MM/AAAA',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: groupCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Grupo',
+                    hintText: 'Geral (ou Família, Amigos, Trabalho…)',
+                  ),
+                ),
+                if (knownGroups.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Wrap(spacing: 6, runSpacing: 6, children: [
+                    for (final g in knownGroups)
+                      _SmallChip(
+                        label: g,
+                        selected: groupCtrl.text.trim() == g,
+                        onTap: () => setSheetState(() => groupCtrl.text = g),
+                      ),
+                  ]),
+                ],
+                const SizedBox(height: 10),
+                TextField(
+                  controller: noteCtrl,
+                  decoration: const InputDecoration(labelText: 'Nota (opcional)'),
+                ),
+                const SizedBox(height: 16),
+                Row(children: [
+                  if (existing != null)
+                    TextButton(
+                      onPressed: busy
+                          ? null
+                          : () async {
+                              setSheetState(() => busy = true);
+                              final ok = await store.deleteBirthday(existing.id);
+                              if (ctx.mounted && ok) Navigator.pop(ctx);
+                            },
+                      child: Text('Apagar', style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
+                    ),
+                  const Spacer(),
+                  TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    style: FilledButton.styleFrom(backgroundColor: c.accent),
+                    onPressed: busy
+                        ? null
+                        : () async {
+                            final parsed = _parseBirthdayDate(dateCtrl.text);
+                            if (parsed == null) {
+                              setSheetState(() => localError = 'Use o formato DD/MM ou DD/MM/AAAA.');
+                              return;
+                            }
+                            setSheetState(() {
+                              busy = true;
+                              localError = null;
+                            });
+                            final ok = existing == null
+                                ? await store.addBirthday(
+                                    name: nameCtrl.text.trim(),
+                                    group: groupCtrl.text.trim().isEmpty ? null : groupCtrl.text.trim(),
+                                    month: parsed.month,
+                                    day: parsed.day,
+                                    year: parsed.year,
+                                    note: noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim(),
+                                  )
+                                : await store.editBirthday(
+                                    existing.id,
+                                    name: nameCtrl.text.trim(),
+                                    group: groupCtrl.text.trim(),
+                                    month: parsed.month,
+                                    day: parsed.day,
+                                    year: parsed.year ?? 0,
+                                    note: noteCtrl.text.trim(),
+                                  );
+                            if (!ctx.mounted) return;
+                            if (ok) {
+                              Navigator.pop(ctx);
+                            } else {
+                              setSheetState(() {
+                                busy = false;
+                                localError = store.error;
+                              });
+                            }
+                          },
+                    child: const Text('Salvar'),
+                  ),
+                ]),
+              ],
+            ),
+          ),
+        );
+      });
+    },
+  );
+}
+
+Future<void> showTrackedDateSheet(BuildContext context, ArcaStore store, {UpcomingItemView? existing}) {
+  final titleCtrl = TextEditingController(text: existing?.title ?? '');
+  final dateCtrl = TextEditingController(text: existing?.date ?? '');
+  final noteCtrl = TextEditingController(text: existing?.note ?? '');
+  String selectedProject = existing?.project ?? '';
+  final projects = store.board?.projects ?? [];
+
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    builder: (ctx) {
+      String? localError;
+      bool busy = false;
+      return StatefulBuilder(builder: (ctx, setSheetState) {
+        final c = ctx.arca;
+        return Padding(
+          padding: EdgeInsets.fromLTRB(20, 18, 20, MediaQuery.viewInsetsOf(ctx).bottom + 20),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  existing == null ? 'Nova data / evento' : 'Editar data',
+                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 12),
+                if (localError != null) ...[
+                  Text(localError!, style: TextStyle(color: Theme.of(ctx).colorScheme.error, fontSize: 13)),
+                  const SizedBox(height: 8),
+                ],
+                TextField(
+                  controller: titleCtrl,
+                  autofocus: existing == null,
+                  decoration: const InputDecoration(labelText: 'Título'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: dateCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Data',
+                    hintText: 'hoje, amanhã, +7d, DD/MM/AAAA ou AAAA-MM-DD',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(spacing: 6, children: [
+                  for (final preset in ['hoje', 'amanhã', '+7d', '+30d'])
+                    _SmallChip(
+                      label: preset,
+                      selected: dateCtrl.text.trim() == preset,
+                      onTap: () => setSheetState(() => dateCtrl.text = preset),
+                    ),
+                ]),
+                if (projects.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Text('Projeto', style: TextStyle(fontSize: 12, color: c.muted)),
+                  const SizedBox(height: 6),
+                  Wrap(spacing: 6, runSpacing: 6, children: [
+                    _SmallChip(
+                      label: 'Sem projeto',
+                      selected: selectedProject.isEmpty,
+                      onTap: () => setSheetState(() => selectedProject = ''),
+                    ),
+                    for (final p in projects)
+                      _SmallChip(
+                        label: p.name,
+                        selected: selectedProject == p.name,
+                        onTap: () => setSheetState(() => selectedProject = p.name),
+                      ),
+                  ]),
+                ],
+                const SizedBox(height: 10),
+                TextField(
+                  controller: noteCtrl,
+                  decoration: const InputDecoration(labelText: 'Nota (opcional)'),
+                ),
+                const SizedBox(height: 16),
+                Row(children: [
+                  if (existing != null)
+                    TextButton(
+                      onPressed: busy
+                          ? null
+                          : () async {
+                              setSheetState(() => busy = true);
+                              final ok = await store.deleteTrackedDate(existing.id);
+                              if (ctx.mounted && ok) Navigator.pop(ctx);
+                            },
+                      child: Text('Dispensar', style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
+                    ),
+                  const Spacer(),
+                  TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    style: FilledButton.styleFrom(backgroundColor: c.accent),
+                    onPressed: busy
+                        ? null
+                        : () async {
+                            setSheetState(() {
+                              busy = true;
+                              localError = null;
+                            });
+                            final ok = existing == null
+                                ? await store.addTrackedDate(
+                                    title: titleCtrl.text.trim(),
+                                    date: dateCtrl.text.trim(),
+                                    project: selectedProject.isEmpty ? null : selectedProject,
+                                    note: noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim(),
+                                  )
+                                : await store.editTrackedDate(
+                                    existing.id,
+                                    title: titleCtrl.text.trim(),
+                                    date: dateCtrl.text.trim(),
+                                    project: selectedProject,
+                                    note: noteCtrl.text.trim(),
+                                  );
+                            if (!ctx.mounted) return;
+                            if (ok) {
+                              Navigator.pop(ctx);
+                            } else {
+                              setSheetState(() {
+                                busy = false;
+                                localError = store.error;
+                              });
+                            }
+                          },
+                    child: const Text('Salvar'),
+                  ),
+                ]),
+              ],
+            ),
+          ),
+        );
+      });
+    },
+  );
 }

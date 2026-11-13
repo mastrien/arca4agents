@@ -29,6 +29,7 @@ pub const META_DEVICE_ID: &str = "device_id";
 
 pub const USER: &str = "user";
 pub const AGENT_PREFIX: &str = "agent:";
+pub const DEFAULT_BIRTHDAY_GROUP: &str = "Geral";
 
 pub struct Database {
   conn: Connection,
@@ -297,6 +298,63 @@ pub struct TaskEdit<'a> {
   pub project_id: Option<Option<i64>>,
 }
 
+#[derive(Clone, Debug)]
+pub struct Birthday {
+  pub id: i64,
+  pub name: String,
+  pub group: String,
+  pub month: u32,
+  pub day: u32,
+  pub year: Option<i32>,
+  pub note: Option<String>,
+  pub created_at: String,
+}
+
+pub struct NewBirthday<'a> {
+  pub name: &'a str,
+  pub group: &'a str,
+  pub month: u32,
+  pub day: u32,
+  pub year: Option<i32>,
+  pub note: Option<&'a str>,
+}
+
+#[derive(Default)]
+pub struct BirthdayEdit<'a> {
+  pub name: Option<&'a str>,
+  pub group: Option<&'a str>,
+  pub month: Option<u32>,
+  pub day: Option<u32>,
+  pub year: Option<Option<i32>>,
+  pub note: Option<Option<&'a str>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TrackedDate {
+  pub id: i64,
+  pub title: String,
+  pub target_date: NaiveDate,
+  pub project_id: Option<i64>,
+  pub project_name: Option<String>,
+  pub note: Option<String>,
+  pub created_at: String,
+}
+
+pub struct NewTrackedDate<'a> {
+  pub title: &'a str,
+  pub target_date: NaiveDate,
+  pub project_id: Option<i64>,
+  pub note: Option<&'a str>,
+}
+
+#[derive(Default)]
+pub struct TrackedDateEdit<'a> {
+  pub title: Option<&'a str>,
+  pub target_date: Option<NaiveDate>,
+  pub project_id: Option<Option<i64>>,
+  pub note: Option<Option<&'a str>>,
+}
+
 const TASK_SELECT: &str = "SELECT t.task_id, t.task_title, t.task_status, t.task_is_daily, t.created_at,
     t.due_date, t.done_at, t.project_id, p.project_name, t.created_by, p.agent_policy
   FROM tasks t LEFT JOIN projects p ON p.project_id = t.project_id";
@@ -387,6 +445,7 @@ impl Database {
       "SELECT MAX(c) FROM (
         SELECT MAX(sync_clock) AS c FROM projects UNION ALL SELECT MAX(sync_clock) FROM tasks
         UNION ALL SELECT MAX(sync_clock) FROM task_history UNION ALL SELECT MAX(sync_clock) FROM suggestions
+        UNION ALL SELECT MAX(sync_clock) FROM birthdays UNION ALL SELECT MAX(sync_clock) FROM tracked_dates
         UNION ALL SELECT MAX(sync_clock) FROM sync_tombstones)",
       [], |r| r.get(0),
     )?;
@@ -907,6 +966,176 @@ impl Database {
   pub fn count_pending_suggestions(&self) -> anyhow::Result<u32> {
     Ok(self.conn.query_row("SELECT COUNT(*) FROM suggestions WHERE state = 'PENDING'", [], |r| r.get(0))?)
   }
+
+  // ---------- Aniversários ----------
+
+  pub fn get_birthdays(&self) -> anyhow::Result<Vec<Birthday>> {
+    let mut stmt = self.conn.prepare(
+      &format!("{BIRTHDAY_SELECT} ORDER BY birth_month ASC, birth_day ASC, person_name ASC, birthday_id ASC"),
+    )?;
+    let rows = stmt.query_map([], birthday_from_row)?
+      .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+  }
+
+  pub fn get_birthday(&self, id: i64) -> anyhow::Result<Birthday> {
+    self.conn.query_row(
+      &format!("{BIRTHDAY_SELECT} WHERE birthday_id = ?1"),
+      params![id],
+      birthday_from_row,
+    )
+    .optional()?
+    .with_context(|| format!("Aniversário #{id} não encontrado"))
+  }
+
+  pub fn add_birthday(&self, b: NewBirthday) -> anyhow::Result<i64> {
+    self.conn.execute(
+      "INSERT INTO birthdays (person_name, group_name, birth_month, birth_day, birth_year, note)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+      params![b.name, b.group, b.month, b.day, b.year, b.note],
+    ).context("Fail to insert birthday")?;
+    Ok(self.conn.last_insert_rowid())
+  }
+
+  pub fn edit_birthday(&self, id: i64, edit: BirthdayEdit) -> anyhow::Result<()> {
+    let (set_year, year) = match edit.year {
+      Some(value) => (true, value),
+      None => (false, None),
+    };
+    let (set_note, note) = match edit.note {
+      Some(value) => (true, value),
+      None => (false, None),
+    };
+    let rows = self.conn.execute(
+      "UPDATE birthdays SET
+        person_name = COALESCE(?1, person_name),
+        group_name = COALESCE(?2, group_name),
+        birth_month = COALESCE(?3, birth_month),
+        birth_day = COALESCE(?4, birth_day),
+        birth_year = CASE WHEN ?5 THEN ?6 ELSE birth_year END,
+        note = CASE WHEN ?7 THEN ?8 ELSE note END
+      WHERE birthday_id = ?9",
+      params![edit.name, edit.group, edit.month, edit.day, set_year, year, set_note, note, id],
+    ).context("Fail to update birthday")?;
+    if rows == 0 {
+      bail!("Aniversário #{id} não encontrado");
+    }
+    Ok(())
+  }
+
+  pub fn delete_birthday(&self, id: i64) -> anyhow::Result<()> {
+    let rows = self.conn.execute("DELETE FROM birthdays WHERE birthday_id = ?1", params![id])
+      .context("Fail to delete birthday")?;
+    if rows == 0 {
+      bail!("Aniversário #{id} não encontrado");
+    }
+    Ok(())
+  }
+
+  // ---------- Datas acompanhadas ----------
+
+  pub fn get_tracked_dates(&self, project_id: Option<i64>) -> anyhow::Result<Vec<TrackedDate>> {
+    let sql = format!(
+      "{TRACKED_DATE_SELECT} WHERE (?1 IS NULL OR d.project_id = ?1) ORDER BY d.target_date ASC, d.title ASC, d.date_id ASC"
+    );
+    let mut stmt = self.conn.prepare(&sql)?;
+    let rows = stmt.query_map(params![project_id], tracked_date_from_row)?
+      .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+  }
+
+  pub fn get_tracked_date(&self, id: i64) -> anyhow::Result<TrackedDate> {
+    self.conn.query_row(
+      &format!("{TRACKED_DATE_SELECT} WHERE d.date_id = ?1"),
+      params![id],
+      tracked_date_from_row,
+    )
+    .optional()?
+    .with_context(|| format!("Data #{id} não encontrada"))
+  }
+
+  pub fn add_tracked_date(&self, item: NewTrackedDate) -> anyhow::Result<i64> {
+    self.conn.execute(
+      "INSERT INTO tracked_dates (title, target_date, project_id, note) VALUES (?1, ?2, ?3, ?4)",
+      params![item.title, date_to_sql(Some(item.target_date)), item.project_id, item.note],
+    ).context("Fail to insert tracked date")?;
+    Ok(self.conn.last_insert_rowid())
+  }
+
+  pub fn edit_tracked_date(&self, id: i64, edit: TrackedDateEdit) -> anyhow::Result<()> {
+    let (set_project, project) = match edit.project_id {
+      Some(value) => (true, value),
+      None => (false, None),
+    };
+    let (set_note, note) = match edit.note {
+      Some(value) => (true, value),
+      None => (false, None),
+    };
+    let rows = self.conn.execute(
+      "UPDATE tracked_dates SET
+        title = COALESCE(?1, title),
+        target_date = COALESCE(?2, target_date),
+        project_id = CASE WHEN ?3 THEN ?4 ELSE project_id END,
+        note = CASE WHEN ?5 THEN ?6 ELSE note END
+      WHERE date_id = ?7",
+      params![
+        edit.title,
+        date_to_sql(edit.target_date),
+        set_project,
+        project,
+        set_note,
+        note,
+        id,
+      ],
+    ).context("Fail to update tracked date")?;
+    if rows == 0 {
+      bail!("Data #{id} não encontrada");
+    }
+    Ok(())
+  }
+
+  pub fn delete_tracked_date(&self, id: i64) -> anyhow::Result<()> {
+    let rows = self.conn.execute("DELETE FROM tracked_dates WHERE date_id = ?1", params![id])
+      .context("Fail to delete tracked date")?;
+    if rows == 0 {
+      bail!("Data #{id} não encontrada");
+    }
+    Ok(())
+  }
+}
+
+const BIRTHDAY_SELECT: &str = "SELECT birthday_id, person_name, group_name, birth_month, birth_day, birth_year, note, created_at
+  FROM birthdays";
+
+fn birthday_from_row(row: &Row) -> rusqlite::Result<Birthday> {
+  Ok(Birthday {
+    id: row.get(0)?,
+    name: row.get(1)?,
+    group: row.get(2)?,
+    month: row.get(3)?,
+    day: row.get(4)?,
+    year: row.get(5)?,
+    note: row.get(6)?,
+    created_at: row.get(7)?,
+  })
+}
+
+const TRACKED_DATE_SELECT: &str = "SELECT d.date_id, d.title, d.target_date, d.project_id, p.project_name, d.note, d.created_at
+  FROM tracked_dates d LEFT JOIN projects p ON p.project_id = d.project_id";
+
+fn tracked_date_from_row(row: &Row) -> rusqlite::Result<TrackedDate> {
+  let raw_date: String = row.get(2)?;
+  let target_date = parse_date_column(Some(raw_date))
+    .ok_or_else(|| rusqlite::Error::InvalidColumnType(2, "target_date".into(), rusqlite::types::Type::Text))?;
+  Ok(TrackedDate {
+    id: row.get(0)?,
+    title: row.get(1)?,
+    target_date,
+    project_id: row.get(3)?,
+    project_name: row.get(4)?,
+    note: row.get(5)?,
+    created_at: row.get(6)?,
+  })
 }
 
 #[cfg(test)]
@@ -1130,5 +1359,78 @@ mod tests {
     let sessions = db.get_sessions().unwrap();
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].state, SessionState::Waiting);
+  }
+
+  #[test]
+  fn birthday_crud_works() {
+    let db = Database::open_in_memory().unwrap();
+    let id = db.add_birthday(NewBirthday {
+      name: "Ana",
+      group: "Família",
+      month: 3,
+      day: 15,
+      year: Some(1995),
+      note: Some("gosta de livros"),
+    }).unwrap();
+
+    let b = db.get_birthday(id).unwrap();
+    assert_eq!(b.name, "Ana");
+    assert_eq!(b.group, "Família");
+    assert_eq!((b.month, b.day, b.year), (3, 15, Some(1995)));
+    assert_eq!(b.note.as_deref(), Some("gosta de livros"));
+
+    db.edit_birthday(id, BirthdayEdit {
+      group: Some("Amigos"),
+      year: Some(None),
+      note: Some(None),
+      ..Default::default()
+    }).unwrap();
+    let b = db.get_birthday(id).unwrap();
+    assert_eq!(b.group, "Amigos");
+    assert_eq!(b.year, None);
+    assert_eq!(b.note, None);
+    assert_eq!(db.get_birthdays().unwrap().len(), 1);
+
+    db.delete_birthday(id).unwrap();
+    assert!(db.get_birthday(id).is_err());
+    assert!(db.get_birthdays().unwrap().is_empty());
+  }
+
+  #[test]
+  fn tracked_date_crud_works() {
+    let db = Database::open_in_memory().unwrap();
+    let proj = db.add_project("viagem", Policy::Own).unwrap();
+    let id = db.add_tracked_date(NewTrackedDate {
+      title: "Renovar passaporte",
+      target_date: d("2026-12-10"),
+      project_id: Some(proj),
+      note: Some("agendar cedo"),
+    }).unwrap();
+
+    let item = db.get_tracked_date(id).unwrap();
+    assert_eq!(item.title, "Renovar passaporte");
+    assert_eq!(item.target_date, d("2026-12-10"));
+    assert_eq!(item.project_id, Some(proj));
+    assert_eq!(item.project_name.as_deref(), Some("viagem"));
+    assert_eq!(item.note.as_deref(), Some("agendar cedo"));
+    assert_eq!(db.get_tracked_dates(Some(proj)).unwrap().len(), 1);
+
+    db.edit_tracked_date(id, TrackedDateEdit {
+      title: Some("Passaporte"),
+      target_date: Some(d("2026-12-15")),
+      project_id: Some(None),
+      note: Some(None),
+    }).unwrap();
+    let item = db.get_tracked_date(id).unwrap();
+    assert_eq!(item.title, "Passaporte");
+    assert_eq!(item.target_date, d("2026-12-15"));
+    assert_eq!(item.project_id, None);
+    assert_eq!(item.note, None);
+    assert!(db.get_tracked_dates(Some(proj)).unwrap().is_empty());
+    assert_eq!(db.get_tracked_dates(None).unwrap().len(), 1);
+
+    db.delete_tracked_date(id).unwrap();
+    assert!(db.get_tracked_date(id).is_err());
+    assert!(db.get_tracked_dates(None).unwrap().is_empty());
   }
 }

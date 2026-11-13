@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use chrono::{Duration, Local, NaiveDate, NaiveDateTime};
+use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime};
 
 pub const DATE_FORMAT: &str = "%Y-%m-%d";
 pub const DATETIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
@@ -12,7 +12,7 @@ pub fn now() -> NaiveDateTime {
   Local::now().naive_local()
 }
 
-/// Aceita `AAAA-MM-DD`, `hoje`, `amanhã` e deslocamentos curtos como `+3d` ou `+2w`.
+/// Aceita `AAAA-MM-DD`, `DD/MM/AAAA`, `hoje`, `amanhã` e deslocamentos curtos como `+3d` ou `+2w`.
 pub fn parse_due(input: &str, today: NaiveDate) -> Result<NaiveDate> {
   let s = input.trim().to_lowercase();
 
@@ -34,8 +34,12 @@ pub fn parse_due(input: &str, today: NaiveDate) -> Result<NaiveDate> {
     return Ok(today + Duration::days(n * days_per_unit));
   }
 
-  NaiveDate::parse_from_str(&s, DATE_FORMAT)
-    .map_err(|_| anyhow::anyhow!("Prazo inválido: '{input}'. Use AAAA-MM-DD, hoje, amanhã ou +Nd"))
+  if let Ok(date) = NaiveDate::parse_from_str(&s, DATE_FORMAT) {
+    return Ok(date);
+  }
+
+  NaiveDate::parse_from_str(&s, "%d/%m/%Y")
+    .map_err(|_| anyhow::anyhow!("Prazo inválido: '{input}'. Use AAAA-MM-DD, DD/MM/AAAA, hoje, amanhã ou +Nd"))
 }
 
 /// "hoje", "amanhã", "em 3 dias", "passou há 2 dias".
@@ -69,6 +73,67 @@ pub fn parse_datetime(s: &str) -> Option<NaiveDateTime> {
   NaiveDateTime::parse_from_str(s, DATETIME_FORMAT).ok()
 }
 
+pub fn validate_birthday(month: u32, day: u32, year: Option<i32>, today: NaiveDate) -> Result<()> {
+  if !(1..=12).contains(&month) || NaiveDate::from_ymd_opt(2024, month, day).is_none() {
+    bail!("Data de aniversário inválida: {day:02}/{month:02}");
+  }
+  if let Some(y) = year {
+    if y < 1900 || y > today.year() {
+      bail!("Ano de nascimento inválido: {y} (esperado entre 1900 e {})", today.year());
+    }
+    if NaiveDate::from_ymd_opt(y, month, day).is_none() {
+      bail!("Data de aniversário inválida: {day:02}/{month:02}/{y}");
+    }
+  }
+  Ok(())
+}
+
+/// Aceita `DD/MM`, `DD/MM/AAAA` ou `AAAA-MM-DD`.
+pub fn parse_birthday_date(input: &str, today: NaiveDate) -> Result<(u32, u32, Option<i32>)> {
+  let s = input.trim();
+  if let Ok(date) = NaiveDate::parse_from_str(s, DATE_FORMAT) {
+    let (m, d, y) = (date.month(), date.day(), date.year());
+    validate_birthday(m, d, Some(y), today)?;
+    return Ok((m, d, Some(y)));
+  }
+
+  let parts: Vec<&str> = s.split('/').collect();
+  let (day, month, year) = match parts.as_slice() {
+    [d, m] => (
+      d.parse::<u32>().map_err(|_| anyhow::anyhow!("Data de aniversário inválida: '{input}'. Use DD/MM, DD/MM/AAAA ou AAAA-MM-DD"))?,
+      m.parse::<u32>().map_err(|_| anyhow::anyhow!("Data de aniversário inválida: '{input}'. Use DD/MM, DD/MM/AAAA ou AAAA-MM-DD"))?,
+      None,
+    ),
+    [d, m, y] if y.len() == 4 => (
+      d.parse::<u32>().map_err(|_| anyhow::anyhow!("Data de aniversário inválida: '{input}'. Use DD/MM, DD/MM/AAAA ou AAAA-MM-DD"))?,
+      m.parse::<u32>().map_err(|_| anyhow::anyhow!("Data de aniversário inválida: '{input}'. Use DD/MM, DD/MM/AAAA ou AAAA-MM-DD"))?,
+      Some(y.parse::<i32>().map_err(|_| anyhow::anyhow!("Ano inválido em '{input}'"))?),
+    ),
+    _ => bail!("Data de aniversário inválida: '{input}'. Use DD/MM, DD/MM/AAAA ou AAAA-MM-DD"),
+  };
+
+  validate_birthday(month, day, year, today)?;
+  Ok((month, day, year))
+}
+
+fn birthday_in_year(year: i32, month: u32, day: u32) -> NaiveDate {
+  NaiveDate::from_ymd_opt(year, month, day)
+    .unwrap_or_else(|| NaiveDate::from_ymd_opt(year, 2, 28).unwrap())
+}
+
+pub fn next_birthday(month: u32, day: u32, today: NaiveDate) -> NaiveDate {
+  let this_year = birthday_in_year(today.year(), month, day);
+  if this_year >= today {
+    this_year
+  } else {
+    birthday_in_year(today.year() + 1, month, day)
+  }
+}
+
+pub fn turning_age(birth_year: Option<i32>, next_date: NaiveDate) -> Option<u32> {
+  birth_year.and_then(|y| (next_date.year() >= y).then(|| (next_date.year() - y) as u32))
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -81,6 +146,7 @@ mod tests {
   fn parses_due_formats() {
     let today = d("2026-10-29");
     assert_eq!(parse_due("2026-11-05", today).unwrap(), d("2026-11-05"));
+    assert_eq!(parse_due("05/11/2026", today).unwrap(), d("2026-11-05"));
     assert_eq!(parse_due("hoje", today).unwrap(), today);
     assert_eq!(parse_due("Amanhã", today).unwrap(), d("2026-10-30"));
     assert_eq!(parse_due("+3d", today).unwrap(), d("2026-11-01"));
@@ -108,5 +174,26 @@ mod tests {
     assert_eq!(humanize_ago(parse_datetime("2026-10-29 11:55:00").unwrap(), now), "há 5 min");
     assert_eq!(humanize_ago(parse_datetime("2026-10-29 07:00:00").unwrap(), now), "há 5h");
     assert_eq!(humanize_ago(parse_datetime("2026-10-26 12:00:00").unwrap(), now), "há 3 dias");
+  }
+
+  #[test]
+  fn parses_and_computes_birthdays() {
+    let today = d("2026-11-13");
+    assert_eq!(parse_birthday_date("15/03", today).unwrap(), (3, 15, None));
+    assert_eq!(parse_birthday_date("5/3/1995", today).unwrap(), (3, 5, Some(1995)));
+    assert_eq!(parse_birthday_date("1995-03-05", today).unwrap(), (3, 5, Some(1995)));
+    assert_eq!(parse_birthday_date("29/02", today).unwrap(), (2, 29, None));
+    assert!(parse_birthday_date("29/02/2023", today).is_err());
+    assert!(parse_birthday_date("31/04", today).is_err());
+    assert!(parse_birthday_date("15/03/2030", today).is_err());
+
+    assert_eq!(next_birthday(11, 13, today), d("2026-11-13"));
+    assert_eq!(next_birthday(12, 1, today), d("2026-12-01"));
+    assert_eq!(next_birthday(3, 15, today), d("2027-03-15"));
+    assert_eq!(next_birthday(2, 29, d("2026-01-10")), d("2026-02-28"));
+    assert_eq!(next_birthday(2, 29, d("2024-01-10")), d("2024-02-29"));
+
+    assert_eq!(turning_age(Some(1995), d("2027-03-15")), Some(32));
+    assert_eq!(turning_age(None, d("2027-03-15")), None);
   }
 }

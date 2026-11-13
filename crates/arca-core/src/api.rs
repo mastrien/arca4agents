@@ -3,16 +3,19 @@
 //! As ações são sempre as do usuário (sem política de agentes).
 
 use anyhow::Result;
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{self, Activity, ActiveWindow};
 use crate::dates;
 use crate::persistence::{
-  Authors, Database, HistoryEntry, NewTask, Policy, Project, Session, Status, Suggestion, Task, TaskEdit,
-  TaskFilter, AGENT_PREFIX, USER,
+  Authors, Birthday, BirthdayEdit, Database, HistoryEntry, NewBirthday, NewTask, NewTrackedDate, Policy, Project,
+  Session, Status, Suggestion, Task, TaskEdit, TaskFilter, TrackedDateEdit, AGENT_PREFIX, DEFAULT_BIRTHDAY_GROUP,
+  USER,
 };
 use crate::suggestions;
+
+pub const UPCOMING_SOON_DAYS: i64 = 7;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -20,6 +23,14 @@ pub enum DueState {
   Overdue,
   Today,
   Upcoming,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpcomingKind {
+  Event,
+  Task,
+  Birthday,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -99,6 +110,32 @@ pub struct HistoryView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct UpcomingItemView {
+  pub id: i64,
+  pub kind: UpcomingKind,
+  pub title: String,
+  /// AAAA-MM-DD (próxima ocorrência para aniversários; data alvo nos demais).
+  pub date: String,
+  /// DD/MM ou DD/MM/AAAA quando em outro ano.
+  pub date_label: String,
+  pub days_until: i64,
+  pub due_label: String,
+  pub due_state: DueState,
+  pub project: Option<String>,
+  pub group: Option<String>,
+  pub note: Option<String>,
+  pub task_status: Option<String>,
+  pub turning_age: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DatesOverview {
+  pub today: String,
+  pub upcoming: Vec<UpcomingItemView>,
+  pub birthdays: Vec<BirthdayView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Board {
   pub today: String,
   pub shelf: Vec<TaskView>,
@@ -107,6 +144,7 @@ pub struct Board {
   pub sessions: Vec<SessionView>,
   pub suggestions: Vec<SuggestionView>,
   pub projects: Vec<ProjectView>,
+  pub upcoming_soon: Vec<UpcomingItemView>,
   /// Minutos até "trabalhando" virar "possivelmente parada" (janela global).
   pub window_minutes: i64,
 }
@@ -123,12 +161,24 @@ fn agent_of(created_by: &str) -> Option<String> {
   (created_by != USER).then(|| created_by.strip_prefix(AGENT_PREFIX).unwrap_or(created_by).to_string())
 }
 
-fn task_view(task: &Task, today: NaiveDate, sessions: &[Session]) -> TaskView {
-  let due_state = task.due_date.map(|d| match d.cmp(&today) {
+fn due_state_of(date: NaiveDate, today: NaiveDate) -> DueState {
+  match date.cmp(&today) {
     std::cmp::Ordering::Less => DueState::Overdue,
     std::cmp::Ordering::Equal => DueState::Today,
     std::cmp::Ordering::Greater => DueState::Upcoming,
-  });
+  }
+}
+
+fn format_short_date(date: NaiveDate, today: NaiveDate) -> String {
+  if date.year() == today.year() {
+    format!("{:02}/{:02}", date.day(), date.month())
+  } else {
+    format!("{:02}/{:02}/{:04}", date.day(), date.month(), date.year())
+  }
+}
+
+fn task_view(task: &Task, today: NaiveDate, sessions: &[Session]) -> TaskView {
+  let due_state = task.due_date.map(|d| due_state_of(d, today));
   TaskView {
     id: task.id,
     title: task.title.clone(),
@@ -245,6 +295,7 @@ pub fn board(db: &Database, filter: &BoardFilter) -> Result<Board> {
     sessions,
     suggestions: db.get_suggestions(true)?.iter().map(|s| suggestion_view(s, now)).collect(),
     projects: db.get_projects()?.iter().map(project_view).collect(),
+    upcoming_soon: collect_upcoming(db, today, project, Some(UPCOMING_SOON_DAYS))?,
     window_minutes: window.default,
   })
 }
@@ -299,6 +350,22 @@ pub struct TaskChanges {
   pub daily: Option<bool>,
 }
 
+fn parse_project_edit(db: &Database, value: Option<&str>) -> Result<Option<Option<i64>>> {
+  match value.map(str::trim) {
+    None => Ok(None),
+    Some("") => Ok(Some(None)),
+    Some(name) => Ok(Some(Some(db.project_id(name)?))),
+  }
+}
+
+fn parse_note_edit(value: Option<&str>) -> Option<Option<&str>> {
+  match value.map(str::trim) {
+    None => None,
+    Some("") => Some(None),
+    Some(note) => Some(Some(note)),
+  }
+}
+
 pub fn edit_task(db: &Database, id: i64, changes: &TaskChanges) -> Result<()> {
   let today = dates::today();
   let due_date = match changes.due.as_deref().map(str::trim) {
@@ -306,11 +373,7 @@ pub fn edit_task(db: &Database, id: i64, changes: &TaskChanges) -> Result<()> {
     Some("") => Some(None),
     Some(d) => Some(Some(dates::parse_due(d, today)?)),
   };
-  let project_id = match changes.project.as_deref().map(str::trim) {
-    None => None,
-    Some("") => Some(None),
-    Some(name) => Some(Some(db.project_id(name)?)),
-  };
+  let project_id = parse_project_edit(db, changes.project.as_deref())?;
   db.edit_task(id, TaskEdit {
     title: changes.title.as_deref().map(str::trim).filter(|t| !t.is_empty()),
     daily: changes.daily,
@@ -411,6 +474,299 @@ pub fn unlink_folder(db: &Database, folder: &str) -> Result<()> {
   db.unlink_folder(folder)
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct BirthdayView {
+  pub id: i64,
+  pub name: String,
+  pub group: String,
+  pub month: u32,
+  pub day: u32,
+  pub year: Option<i32>,
+  pub note: Option<String>,
+  /// "15/03" ou "15/03/1995".
+  pub date_label: String,
+  /// Próxima ocorrência (AAAA-MM-DD).
+  pub next_date: String,
+  pub days_until: i64,
+  /// "hoje", "amanhã", "em 12 dias".
+  pub due_label: String,
+  pub due_state: DueState,
+  /// Idade que completa em `next_date`, quando `year` está preenchido.
+  pub turning_age: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct BirthdayInput {
+  pub name: String,
+  pub group: Option<String>,
+  pub month: u32,
+  pub day: u32,
+  pub year: Option<i32>,
+  pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct BirthdayChanges {
+  pub name: Option<String>,
+  pub group: Option<String>,
+  pub month: Option<u32>,
+  pub day: Option<u32>,
+  /// `0` limpa o ano de nascimento.
+  pub year: Option<i32>,
+  /// `""` limpa a nota.
+  pub note: Option<String>,
+}
+
+fn birthday_view(b: &Birthday, today: NaiveDate) -> BirthdayView {
+  let next = dates::next_birthday(b.month, b.day, today);
+  let days_until = (next - today).num_days();
+  BirthdayView {
+    id: b.id,
+    name: b.name.clone(),
+    group: b.group.clone(),
+    month: b.month,
+    day: b.day,
+    year: b.year,
+    note: b.note.clone(),
+    date_label: match b.year {
+      Some(y) => format!("{:02}/{:02}/{y:04}", b.day, b.month),
+      None => format!("{:02}/{:02}", b.day, b.month),
+    },
+    next_date: next.to_string(),
+    days_until,
+    due_label: dates::humanize_due(next, today),
+    due_state: if days_until == 0 { DueState::Today } else { DueState::Upcoming },
+    turning_age: dates::turning_age(b.year, next),
+  }
+}
+
+fn birthdays_for(db: &Database, today: NaiveDate) -> Result<Vec<BirthdayView>> {
+  let mut views: Vec<BirthdayView> = db.get_birthdays()?.iter().map(|b| birthday_view(b, today)).collect();
+  views.sort_by(|a, b| {
+    a.days_until
+      .cmp(&b.days_until)
+      .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+      .then_with(|| a.id.cmp(&b.id))
+  });
+  Ok(views)
+}
+
+pub fn birthdays(db: &Database) -> Result<Vec<BirthdayView>> {
+  birthdays_for(db, dates::today())
+}
+
+pub fn add_birthday(db: &Database, input: &BirthdayInput) -> Result<i64> {
+  let name = input.name.trim();
+  if name.is_empty() {
+    anyhow::bail!("A pessoa precisa de um nome");
+  }
+  dates::validate_birthday(input.month, input.day, input.year, dates::today())?;
+  let group = input.group.as_deref().map(str::trim).filter(|g| !g.is_empty()).unwrap_or(DEFAULT_BIRTHDAY_GROUP);
+  let note = input.note.as_deref().map(str::trim).filter(|n| !n.is_empty());
+  db.add_birthday(NewBirthday {
+    name,
+    group,
+    month: input.month,
+    day: input.day,
+    year: input.year,
+    note,
+  })
+}
+
+pub fn edit_birthday(db: &Database, id: i64, changes: &BirthdayChanges) -> Result<()> {
+  let current = db.get_birthday(id)?;
+  let name = match changes.name.as_deref().map(str::trim) {
+    Some("") => anyhow::bail!("A pessoa precisa de um nome"),
+    Some(n) => Some(n),
+    None => None,
+  };
+  let group = changes.group.as_deref().map(str::trim).map(|g| if g.is_empty() { DEFAULT_BIRTHDAY_GROUP } else { g });
+  let month = changes.month.unwrap_or(current.month);
+  let day = changes.day.unwrap_or(current.day);
+  let resolved_year = match changes.year {
+    None => current.year,
+    Some(y) if y <= 0 => None,
+    Some(y) => Some(y),
+  };
+  dates::validate_birthday(month, day, resolved_year, dates::today())?;
+
+  let year_edit = changes.year.map(|y| (y > 0).then_some(y));
+  let note_edit = parse_note_edit(changes.note.as_deref());
+
+  db.edit_birthday(id, BirthdayEdit {
+    name,
+    group,
+    month: changes.month,
+    day: changes.day,
+    year: year_edit,
+    note: note_edit,
+  })
+}
+
+pub fn delete_birthday(db: &Database, id: i64) -> Result<()> {
+  db.delete_birthday(id)
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TrackedDateInput {
+  pub title: String,
+  /// AAAA-MM-DD, DD/MM/AAAA, hoje, amanhã, +3d.
+  pub date: String,
+  pub project: Option<String>,
+  pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TrackedDateChanges {
+  pub title: Option<String>,
+  pub date: Option<String>,
+  /// `""` remove o projeto.
+  pub project: Option<String>,
+  /// `""` limpa a nota.
+  pub note: Option<String>,
+}
+
+fn collect_upcoming(
+  db: &Database,
+  today: NaiveDate,
+  project_id: Option<i64>,
+  max_days: Option<i64>,
+) -> Result<Vec<UpcomingItemView>> {
+  let within_limit = |days_until: i64| max_days.is_none_or(|limit| days_until <= limit);
+  let mut items = Vec::new();
+
+  for item in db.get_tracked_dates(project_id)? {
+    let days_until = (item.target_date - today).num_days();
+    if !within_limit(days_until) {
+      continue;
+    }
+    items.push(UpcomingItemView {
+      id: item.id,
+      kind: UpcomingKind::Event,
+      title: item.title,
+      date: item.target_date.to_string(),
+      date_label: format_short_date(item.target_date, today),
+      days_until,
+      due_label: dates::humanize_due(item.target_date, today),
+      due_state: due_state_of(item.target_date, today),
+      project: item.project_name,
+      group: None,
+      note: item.note,
+      task_status: None,
+      turning_age: None,
+    });
+  }
+
+  for task in db.get_tasks(TaskFilter { project_id, authors: Authors::All })? {
+    if task.status == Status::Done {
+      continue;
+    }
+    let Some(due) = task.due_date else { continue };
+    let days_until = (due - today).num_days();
+    if !within_limit(days_until) {
+      continue;
+    }
+    items.push(UpcomingItemView {
+      id: task.id,
+      kind: UpcomingKind::Task,
+      title: task.title,
+      date: due.to_string(),
+      date_label: format_short_date(due, today),
+      days_until,
+      due_label: dates::humanize_due(due, today),
+      due_state: due_state_of(due, today),
+      project: task.project_name,
+      group: None,
+      note: None,
+      task_status: Some(task.status.as_str().to_string()),
+      turning_age: None,
+    });
+  }
+
+  if project_id.is_none() {
+    for b in db.get_birthdays()? {
+      let next = dates::next_birthday(b.month, b.day, today);
+      let days_until = (next - today).num_days();
+      if !within_limit(days_until) {
+        continue;
+      }
+      let view = birthday_view(&b, today);
+      items.push(UpcomingItemView {
+        id: view.id,
+        kind: UpcomingKind::Birthday,
+        title: view.name,
+        date: view.next_date,
+        date_label: format_short_date(next, today),
+        days_until,
+        due_label: view.due_label,
+        due_state: view.due_state,
+        project: None,
+        group: Some(view.group),
+        note: view.note,
+        task_status: None,
+        turning_age: view.turning_age,
+      });
+    }
+  }
+
+  items.sort_by(|a, b| {
+    a.days_until
+      .cmp(&b.days_until)
+      .then_with(|| a.kind.cmp(&b.kind))
+      .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+      .then_with(|| a.id.cmp(&b.id))
+  });
+  Ok(items)
+}
+
+pub fn dates_overview(db: &Database, max_days: Option<i64>) -> Result<DatesOverview> {
+  let today = dates::today();
+  Ok(DatesOverview {
+    today: today.to_string(),
+    upcoming: collect_upcoming(db, today, None, max_days)?,
+    birthdays: birthdays_for(db, today)?,
+  })
+}
+
+pub fn add_tracked_date(db: &Database, input: &TrackedDateInput) -> Result<i64> {
+  let title = input.title.trim();
+  if title.is_empty() {
+    anyhow::bail!("A data precisa de um título");
+  }
+  let raw_date = input.date.trim();
+  if raw_date.is_empty() {
+    anyhow::bail!("Informe uma data");
+  }
+  let target_date = dates::parse_due(raw_date, dates::today())?;
+  let note = input.note.as_deref().map(str::trim).filter(|n| !n.is_empty());
+  db.add_tracked_date(NewTrackedDate {
+    title,
+    target_date,
+    project_id: optional_project(db, input.project.as_deref())?,
+    note,
+  })
+}
+
+pub fn edit_tracked_date(db: &Database, id: i64, changes: &TrackedDateChanges) -> Result<()> {
+  let title = match changes.title.as_deref().map(str::trim) {
+    Some("") => anyhow::bail!("A data precisa de um título"),
+    Some(t) => Some(t),
+    None => None,
+  };
+  let target_date = match changes.date.as_deref().map(str::trim) {
+    None => None,
+    Some("") => anyhow::bail!("Informe uma data"),
+    Some(d) => Some(dates::parse_due(d, dates::today())?),
+  };
+  let project_id = parse_project_edit(db, changes.project.as_deref())?;
+  let note = parse_note_edit(changes.note.as_deref());
+  db.edit_tracked_date(id, TrackedDateEdit { title, target_date, project_id, note })
+}
+
+pub fn delete_tracked_date(db: &Database, id: i64) -> Result<()> {
+  db.delete_tracked_date(id)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -448,5 +804,84 @@ mod tests {
     assert_eq!(db.get_project(project).unwrap().active_window, Some(15));
     edit_project(&db, project, &ProjectChanges { active_window: Some(0), ..Default::default() }).unwrap();
     assert_eq!(db.get_project(project).unwrap().active_window, None);
+  }
+
+  #[test]
+  fn dates_overview_and_board_upcoming_combine_sources() {
+    let db = Database::open_in_memory().unwrap();
+    add_project(&db, "arca", "OWN").unwrap();
+    let today = dates::today();
+
+    let overdue_date = (today - chrono::Duration::days(2)).format(dates::DATE_FORMAT).to_string();
+    let overdue_id = add_tracked_date(&db, &TrackedDateInput {
+      title: "Entrega atrasada".into(),
+      date: overdue_date,
+      project: Some("arca".into()),
+      note: Some("falar com cliente".into()),
+    }).unwrap();
+    add_tracked_date(&db, &TrackedDateInput {
+      title: "Dentista".into(),
+      date: "+5d".into(),
+      ..Default::default()
+    }).unwrap();
+    let distant_id = add_tracked_date(&db, &TrackedDateInput {
+      title: "Viagem".into(),
+      date: "+20d".into(),
+      ..Default::default()
+    }).unwrap();
+
+    add_task(&db, &TaskInput { title: "Subir build".into(), due: Some("+2d".into()), ..Default::default() }).unwrap();
+    let done_task = add_task(&db, &TaskInput { title: "Já foi".into(), due: Some("+1d".into()), ..Default::default() }).unwrap();
+    move_task(&db, done_task, "DONE").unwrap();
+
+    let bday_date = today + chrono::Duration::days(3);
+    let birth_year = if bday_date.month() == 2 && bday_date.day() == 29 { 1996 } else { bday_date.year() - 30 };
+    let bday_id = add_birthday(&db, &BirthdayInput {
+      name: "Ana".into(),
+      group: None,
+      month: bday_date.month(),
+      day: bday_date.day(),
+      year: Some(birth_year),
+      note: Some("chocolate".into()),
+    }).unwrap();
+    assert_eq!(birthdays(&db).unwrap()[0].group, DEFAULT_BIRTHDAY_GROUP);
+    edit_birthday(&db, bday_id, &BirthdayChanges { group: Some("Família".into()), ..Default::default() }).unwrap();
+    let bdays = birthdays(&db).unwrap();
+    assert_eq!(bdays.len(), 1);
+    assert_eq!(bdays[0].group, "Família");
+    assert_eq!(bdays[0].turning_age, Some((bday_date.year() - birth_year) as u32));
+
+    let overview = dates_overview(&db, None).unwrap();
+    let kinds: Vec<(UpcomingKind, &str)> = overview.upcoming.iter().map(|i| (i.kind, i.title.as_str())).collect();
+    assert_eq!(kinds, vec![
+      (UpcomingKind::Event, "Entrega atrasada"),
+      (UpcomingKind::Task, "Subir build"),
+      (UpcomingKind::Birthday, "Ana"),
+      (UpcomingKind::Event, "Dentista"),
+      (UpcomingKind::Event, "Viagem"),
+    ]);
+    assert_eq!(overview.upcoming[0].due_state, DueState::Overdue);
+    assert_eq!(overview.upcoming[0].project.as_deref(), Some("arca"));
+    assert_eq!(overview.upcoming[2].group.as_deref(), Some("Família"));
+
+    let b = board(&db, &BoardFilter::default()).unwrap();
+    let soon_titles: Vec<&str> = b.upcoming_soon.iter().map(|i| i.title.as_str()).collect();
+    assert_eq!(soon_titles, vec!["Entrega atrasada", "Subir build", "Ana", "Dentista"]);
+    assert_eq!(b.upcoming_soon[0].due_state, DueState::Overdue);
+
+    edit_tracked_date(&db, overdue_id, &TrackedDateChanges {
+      title: Some("Entrega remarcada".into()),
+      project: Some(String::new()),
+      note: Some(String::new()),
+      ..Default::default()
+    }).unwrap();
+    let edited = db.get_tracked_date(overdue_id).unwrap();
+    assert_eq!((edited.title.as_str(), edited.project_id, edited.note), ("Entrega remarcada", None, None));
+
+    delete_tracked_date(&db, overdue_id).unwrap();
+    delete_tracked_date(&db, distant_id).unwrap();
+    let b = board(&db, &BoardFilter::default()).unwrap();
+    let soon_titles: Vec<&str> = b.upcoming_soon.iter().map(|i| i.title.as_str()).collect();
+    assert_eq!(soon_titles, vec!["Subir build", "Ana", "Dentista"]);
   }
 }

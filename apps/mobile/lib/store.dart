@@ -9,6 +9,7 @@ import 'src/rust/api/arca.dart' as arca;
 /// Estado do app: board atual, filtros e sincronização. Toda escrita passa pelo núcleo em Rust.
 class ArcaStore extends ChangeNotifier with WidgetsBindingObserver {
   Board? board;
+  DatesOverview? dates;
   String? project;
   String authors = 'all';
   String? error;
@@ -49,7 +50,12 @@ class ArcaStore extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> reload() async {
     try {
-      board = Board.fromJson(jsonDecode(await arca.board(project: project, authors: authors)));
+      final results = await Future.wait([
+        arca.board(project: project, authors: authors),
+        arca.datesOverview(),
+      ]);
+      board = Board.fromJson(jsonDecode(results[0]));
+      dates = DatesOverview.fromJson(jsonDecode(results[1]));
       error = null;
     } catch (e) {
       error = '$e';
@@ -94,6 +100,90 @@ class ArcaStore extends ChangeNotifier with WidgetsBindingObserver {
   Future<bool> addProject(String name, String policy) => run(() => arca.addProject(name: name, policy: policy));
   Future<bool> setPolicy(int id, String policy) => run(() => arca.editProject(id: id, changes: jsonEncode({'policy': policy})));
   Future<bool> deleteProject(int id) => run(() => arca.deleteProject(id: id));
+
+  Future<bool> addBirthday({
+    required String name,
+    String? group,
+    required int month,
+    required int day,
+    int? year,
+    String? note,
+  }) =>
+      run(
+        () => arca.addBirthday(
+          input: jsonEncode({
+            'name': name,
+            'group': ?group,
+            'month': month,
+            'day': day,
+            'year': ?year,
+            'note': ?note,
+          }),
+        ),
+      );
+
+  Future<bool> editBirthday(
+    int id, {
+    String? name,
+    String? group,
+    int? month,
+    int? day,
+    int? year,
+    String? note,
+  }) =>
+      run(
+        () => arca.editBirthday(
+          id: id,
+          changes: jsonEncode({
+            'name': ?name,
+            'group': ?group,
+            'month': ?month,
+            'day': ?day,
+            'year': ?year,
+            'note': ?note,
+          }),
+        ),
+      );
+
+  Future<bool> deleteBirthday(int id) => run(() => arca.deleteBirthday(id: id));
+
+  Future<bool> addTrackedDate({
+    required String title,
+    required String date,
+    String? project,
+    String? note,
+  }) =>
+      run(
+        () => arca.addTrackedDate(
+          input: jsonEncode({
+            'title': title,
+            'date': date,
+            'project': ?project,
+            'note': ?note,
+          }),
+        ),
+      );
+
+  Future<bool> editTrackedDate(
+    int id, {
+    String? title,
+    String? date,
+    String? project,
+    String? note,
+  }) =>
+      run(
+        () => arca.editTrackedDate(
+          id: id,
+          changes: jsonEncode({
+            'title': ?title,
+            'date': ?date,
+            'project': ?project,
+            'note': ?note,
+          }),
+        ),
+      );
+
+  Future<bool> deleteTrackedDate(int id) => run(() => arca.deleteTrackedDate(id: id));
 
   Future<List<HistoryView>> history() async =>
       (jsonDecode(await arca.history()) as List).map((e) => HistoryView.fromJson(e)).toList();

@@ -18,6 +18,8 @@ import {
   TaskView,
 } from "./api";
 import Stats from "./Stats";
+import Dates from "./Dates";
+import { UpcomingItemView } from "./api";
 import "./App.css";
 
 // O board é relido periodicamente: hooks, MCP, CLI e a sincronização escrevem no mesmo banco.
@@ -41,7 +43,7 @@ export default function App() {
   const [project, setProject] = useState("");
   const [authors, setAuthors] = useState<Authors>(() => (localStorage.getItem(AUTHORS_KEY) as Authors) || "all");
   const [modal, setModal] = useState<Modal>(null);
-  const [view, setView] = useState<"board" | "stats">("board");
+  const [view, setView] = useState<"board" | "stats" | "dates">("board");
   const [version, setVersion] = useState<string | null>(null);
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});
@@ -139,6 +141,18 @@ export default function App() {
             <Icon name="history" />
           </button>
           <button
+            className={`icon ${view === "dates" ? "active" : ""}`}
+            aria-label="Datas e aniversários"
+            title="Datas e aniversários"
+            aria-pressed={view === "dates"}
+            onClick={() => setView(view === "dates" ? "board" : "dates")}
+          >
+            <Icon name="calendar" />
+            {board.upcoming_soon.some((i) => i.due_state === "overdue" || i.due_state === "today") && (
+              <span className="icon-badge" aria-hidden="true" />
+            )}
+          </button>
+          <button
             className={`icon ${view === "stats" ? "active" : ""}`}
             aria-label="Gráficos"
             title="Gráficos"
@@ -161,9 +175,19 @@ export default function App() {
 
         {view === "stats" ? (
           <Stats onBack={() => setView("board")} />
+        ) : view === "dates" ? (
+          <Dates
+            projects={board.projects}
+            onBack={() => setView("board")}
+            onBoardChanged={() => run(async () => {})}
+          />
         ) : (
           <>
             <AddBar projects={board.projects} defaultProject={project} onAdd={(input) => run(() => api.addTask(input))} />
+
+            {board.upcoming_soon.length > 0 && (
+              <UpcomingStrip items={board.upcoming_soon} onOpen={() => setView("dates")} />
+            )}
 
             <div className="layout">
               <section className="columns" aria-label="Quadro">
@@ -235,6 +259,12 @@ const ICONS: Record<string, React.ReactNode> = {
       <path d="M11 18h2" />
     </>
   ),
+  calendar: (
+    <>
+      <rect x="3" y="4" width="18" height="17" rx="2" />
+      <path d="M8 2v4M16 2v4M3 10h18" />
+    </>
+  ),
 };
 
 function Icon({ name, size = 18 }: { name: keyof typeof ICONS; size?: number }) {
@@ -242,6 +272,29 @@ function Icon({ name, size = 18 }: { name: keyof typeof ICONS; size?: number }) 
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {ICONS[name]}
     </svg>
+  );
+}
+
+function UpcomingStrip({ items, onOpen }: { items: UpcomingItemView[]; onOpen: () => void }) {
+  const shown = items.slice(0, 4);
+  const rest = items.length - shown.length;
+  return (
+    <button className="upcoming-strip" type="button" onClick={onOpen} title="Abrir Datas e Aniversários">
+      <span className="upcoming-strip-label">
+        <Icon name="calendar" size={14} />
+        Próximas datas
+      </span>
+      <span className="upcoming-strip-items">
+        {shown.map((item) => (
+          <span key={`${item.kind}-${item.id}`} className={`upcoming-chip due-${item.due_state}`}>
+            <span className="upcoming-chip-title">{item.title}</span>
+            <span className="upcoming-chip-due">{item.due_label}</span>
+          </span>
+        ))}
+        {rest > 0 && <span className="upcoming-chip upcoming-chip-more">+{rest}</span>}
+      </span>
+      <span className="upcoming-strip-cta">Ver tudo →</span>
+    </button>
   );
 }
 

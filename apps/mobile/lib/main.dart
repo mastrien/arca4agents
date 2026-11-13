@@ -56,7 +56,8 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  int section = 0; // 0 tarefas, 1 agentes, 2 mais
+  int section = 0;
+  String datesTab = 'upcoming'; // 0 tarefas, 1 agentes, 2 mais
   String list = 'CART';
   AppUpdate? update;
   String? updateStatus;
@@ -118,19 +119,36 @@ class _HomeScreenState extends State<HomeScreen> {
                               board: board,
                               list: list,
                               onList: (v) => setState(() => list = v),
-                              onAttention: () => setState(() => section = 1),
+                              onAttention: () => setState(() => section = 2),
+                              onOpenDates: () => setState(() => section = 1),
                             ),
-                          1 => AgentsScreen(store: store, board: board),
+                          1 => DatesScreen(
+                              store: store,
+                              board: board,
+                              tab: datesTab,
+                              onTab: (v) => setState(() => datesTab = v),
+                            ),
+                          2 => AgentsScreen(store: store, board: board),
                           _ => MoreScreen(store: store),
                         },
                 ),
               ],
             ),
           ),
-          floatingActionButton: section == 0 && board != null
+          floatingActionButton: (section == 0 || section == 1) && board != null
               ? FloatingActionButton(
-                  tooltip: 'Nova tarefa',
-                  onPressed: () => showTaskSheet(context, store),
+                  tooltip: section == 0
+                      ? 'Nova tarefa'
+                      : (datesTab == 'birthdays' ? 'Novo aniversário' : 'Nova data'),
+                  onPressed: () {
+                    if (section == 0) {
+                      showTaskSheet(context, store);
+                    } else if (datesTab == 'birthdays') {
+                      showBirthdaySheet(context, store);
+                    } else {
+                      showTrackedDateSheet(context, store);
+                    }
+                  },
                   child: const Icon(Icons.add, size: 26),
                 )
               : null,
@@ -140,6 +158,14 @@ class _HomeScreenState extends State<HomeScreen> {
             height: 68,
             destinations: [
               const NavigationDestination(icon: Icon(Icons.format_list_bulleted), label: 'Tarefas'),
+              NavigationDestination(
+                icon: Badge(
+                  isLabelVisible: board != null && board.upcomingSoon.any((i) => i.dueState == 'overdue' || i.dueState == 'today'),
+                  backgroundColor: c.attentionDot,
+                  child: const Icon(Icons.event_outlined),
+                ),
+                label: 'Datas',
+              ),
               NavigationDestination(
                 icon: Badge(
                   isLabelVisible: attention > 0,

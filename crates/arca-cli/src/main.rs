@@ -1,5 +1,8 @@
 use arca::persistence::{Authors, Database, Policy, SessionState};
-use arca::{dates, AddOptions, BoardOptions, EditOptions, ListOptions, Ping, Target};
+use arca::{
+    dates, AddOptions, BirthdayAddOptions, BirthdayEditOptions, BoardOptions, DatesListOptions, EditOptions,
+    ListOptions, Ping, Target, TrackedDateAddOptions, TrackedDateEditOptions,
+};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use std::process::ExitCode;
@@ -286,6 +289,139 @@ enum Commands {
         #[command(subcommand)]
         action: Option<UsageCommands>,
     },
+    /// Manage birthdays grouped by person group
+    #[command(visible_alias = "bday")]
+    Birthday {
+        #[command(subcommand)]
+        action: Option<BirthdayCommands>,
+    },
+    /// Track upcoming dates, events, deadlines, and birthdays
+    #[command(visible_aliases = ["date", "datas"])]
+    Dates {
+        #[command(subcommand)]
+        action: Option<DatesCommands>,
+    },
+}
+
+#[derive(Subcommand)]
+enum DatesCommands {
+    /// List upcoming dates (events, task deadlines, and birthdays)
+    List {
+        /// Limit horizon to N days from today (overdue always shown)
+        #[arg(long)]
+        days: Option<i64>,
+
+        /// Filter by project name
+        #[arg(short, long)]
+        project: Option<String>,
+
+        /// Show only standalone tracked events
+        #[arg(long)]
+        only_events: bool,
+    },
+    /// Add a standalone tracked date or event (date: AAAA-MM-DD, DD/MM/AAAA, hoje, amanhã, +3d)
+    Add {
+        /// Title
+        title: String,
+
+        /// Date (AAAA-MM-DD, DD/MM/AAAA, hoje, amanhã, +3d)
+        date: String,
+
+        /// Optional project name
+        #[arg(short, long)]
+        project: Option<String>,
+
+        /// Optional note
+        #[arg(short, long)]
+        note: Option<String>,
+    },
+    /// Edit a tracked date
+    Edit {
+        /// Date id
+        id: i64,
+
+        /// New title
+        #[arg(short, long)]
+        title: Option<String>,
+
+        /// New date (AAAA-MM-DD, DD/MM/AAAA, hoje, amanhã, +3d)
+        #[arg(short, long)]
+        date: Option<String>,
+
+        /// Project name (or "none" to clear)
+        #[arg(short, long)]
+        project: Option<String>,
+
+        /// Note (or "none" to clear)
+        #[arg(short, long)]
+        note: Option<String>,
+    },
+    /// Dismiss or remove a standalone tracked date
+    #[command(visible_aliases = ["done", "rm", "dismiss"])]
+    Delete {
+        /// Date id
+        id: i64,
+    },
+}
+
+#[derive(Subcommand)]
+enum BirthdayCommands {
+    /// List birthdays grouped by group (or sorted by date with --by-date)
+    List {
+        /// Filter by group name
+        #[arg(short, long)]
+        group: Option<String>,
+
+        /// Sort flat list by upcoming date instead of grouping
+        #[arg(long)]
+        by_date: bool,
+    },
+    /// Add a person's birthday (date: DD/MM, DD/MM/AAAA, or AAAA-MM-DD)
+    Add {
+        /// Person name
+        name: String,
+
+        /// Birthday date (DD/MM, DD/MM/AAAA, or AAAA-MM-DD)
+        date: String,
+
+        /// Group name (default: Geral)
+        #[arg(short, long)]
+        group: Option<String>,
+
+        /// Optional note
+        #[arg(short, long)]
+        note: Option<String>,
+    },
+    /// Edit a birthday entry
+    Edit {
+        /// Birthday id
+        id: i64,
+
+        /// New name
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// New date (DD/MM, DD/MM/AAAA, or AAAA-MM-DD)
+        #[arg(short, long)]
+        date: Option<String>,
+
+        /// Group name (or "none" to reset to Geral)
+        #[arg(short, long)]
+        group: Option<String>,
+
+        /// Birth year (or "none" to clear)
+        #[arg(long)]
+        year: Option<String>,
+
+        /// Note (or "none" to clear)
+        #[arg(short, long)]
+        note: Option<String>,
+    },
+    /// Delete a birthday entry
+    Delete {
+        /// Birthday id
+        id: i64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -449,6 +585,45 @@ fn run(action: Commands) -> anyhow::Result<()> {
             None => arca::usage_show(&db),
             Some(UsageCommands::Codex) => arca::usage_codex(&db),
             Some(UsageCommands::Statusline) => unreachable!("handled in main"),
+        },
+        Commands::Birthday {action} => match action {
+            None => arca::birthday_list(&db, None, false),
+            Some(BirthdayCommands::List {group, by_date}) => arca::birthday_list(&db, group.as_deref(), by_date),
+            Some(BirthdayCommands::Add {name, date, group, note}) => arca::birthday_add(&db, BirthdayAddOptions {
+                name: &name,
+                date: &date,
+                group: group.as_deref(),
+                note: note.as_deref(),
+            }),
+            Some(BirthdayCommands::Edit {id, name, date, group, year, note}) => arca::birthday_edit(&db, id, BirthdayEditOptions {
+                name: name.as_deref(),
+                date: date.as_deref(),
+                group: group.as_deref(),
+                year: year.as_deref(),
+                note: note.as_deref(),
+            }),
+            Some(BirthdayCommands::Delete {id}) => arca::birthday_delete(&db, id),
+        },
+        Commands::Dates {action} => match action {
+            None => arca::dates_list(&db, DatesListOptions::default()),
+            Some(DatesCommands::List {days, project, only_events}) => arca::dates_list(&db, DatesListOptions {
+                days,
+                project: project.as_deref(),
+                only_events,
+            }),
+            Some(DatesCommands::Add {title, date, project, note}) => arca::dates_add(&db, TrackedDateAddOptions {
+                title: &title,
+                date: &date,
+                project: project.as_deref(),
+                note: note.as_deref(),
+            }),
+            Some(DatesCommands::Edit {id, title, date, project, note}) => arca::dates_edit(&db, id, TrackedDateEditOptions {
+                title: title.as_deref(),
+                date: date.as_deref(),
+                project: project.as_deref(),
+                note: note.as_deref(),
+            }),
+            Some(DatesCommands::Delete {id}) => arca::dates_delete(&db, id),
         },
         Commands::Ping {..} => unreachable!("handled in main"),
     }

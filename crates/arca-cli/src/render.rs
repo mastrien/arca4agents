@@ -2,8 +2,10 @@ use crate::agents::{self, Activity, ActiveWindow};
 use crate::dates::{self, humanize_ago, humanize_due};
 use crate::persistence::{HistoryEntry, Policy, Project, Session, Status, Suggestion, Task, AGENT_PREFIX};
 use crate::suggestions;
+use arca_core::api::{BirthdayView, DueState, UpcomingItemView, UpcomingKind};
 use chrono::{NaiveDate, NaiveDateTime};
 use colored::{ColoredString, Colorize};
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 
 /// O que mostrar em cada linha de uma listagem de tarefas.
@@ -398,6 +400,129 @@ pub fn render_board(shelf: &[Task], cart: &[Task], done: &[Task], style: &ListSt
       .collect::<Vec<_>>()
       .join(&gap);
     println!("{}", line.trim_end());
+  }
+}
+
+// ---------- Aniversários ----------
+
+fn upcoming_due_tag(state: DueState, days_until: i64, label: &str) -> ColoredString {
+  match state {
+    DueState::Overdue => label.red().bold(),
+    DueState::Today => label.yellow().bold(),
+    DueState::Upcoming if days_until <= 7 => label.yellow(),
+    DueState::Upcoming => label.normal(),
+  }
+}
+
+fn birthday_due_tag(b: &BirthdayView) -> ColoredString {
+  match b.due_state {
+    DueState::Today => b.due_label.as_str().green().bold(),
+    DueState::Overdue => b.due_label.as_str().red().bold(),
+    DueState::Upcoming if b.days_until <= 7 => b.due_label.as_str().yellow(),
+    DueState::Upcoming => b.due_label.as_str().blue(),
+  }
+}
+
+fn format_birthday_line(b: &BirthdayView, show_group: bool) -> String {
+  let mut tags: Vec<ColoredString> = vec![b.date_label.as_str().normal()];
+  if let Some(age) = b.turning_age {
+    tags.push(format!("faz {age} anos").cyan());
+  }
+  tags.push(birthday_due_tag(b));
+  if show_group {
+    tags.push(format!("[{}]", b.group).magenta());
+  }
+  if let Some(note) = &b.note {
+    tags.push(note.as_str().dimmed());
+  }
+  format!("{} {}  {}", format!("#{}", b.id).purple(), b.name, join_tags(tags))
+}
+
+pub fn render_birthdays(items: &[BirthdayView], by_date: bool) {
+  if items.is_empty() {
+    println!("{}", "Nenhum aniversário cadastrado. Use `arca birthday add <nome> <DD/MM>`.".dimmed());
+    return;
+  }
+
+  if by_date {
+    for b in items {
+      println!("{}", format_birthday_line(b, true));
+    }
+    return;
+  }
+
+  let mut groups: BTreeMap<&str, Vec<&BirthdayView>> = BTreeMap::new();
+  for b in items {
+    groups.entry(b.group.as_str()).or_default().push(b);
+  }
+  for (i, (group, people)) in groups.into_iter().enumerate() {
+    if i > 0 {
+      println!();
+    }
+    println!("{} {}", group.magenta().bold(), format!("({})", people.len()).dimmed());
+    for b in people {
+      println!("  {}", format_birthday_line(b, false));
+    }
+  }
+}
+
+// ---------- Datas ----------
+
+pub fn render_upcoming_strip(items: &[UpcomingItemView]) {
+  if items.is_empty() {
+    return;
+  }
+  println!("{}", format!("Próximas datas ({})", items.len()).bold());
+  for item in items {
+    let kind = match item.kind {
+      UpcomingKind::Event => "evento".cyan(),
+      UpcomingKind::Task => "tarefa".blue(),
+      UpcomingKind::Birthday => "aniversário".magenta(),
+    };
+    let due = upcoming_due_tag(item.due_state, item.days_until, &item.due_label);
+    let mut detail = Vec::new();
+    detail.push(due);
+    detail.push(kind);
+    if let Some(proj) = &item.project {
+      detail.push(format!("+{proj}").green());
+    } else if let Some(group) = &item.group {
+      detail.push(group.as_str().magenta());
+    }
+    detail.push(item.date_label.as_str().dimmed());
+    println!("  • {}  {}", item.title, join_tags(detail));
+  }
+  println!();
+}
+
+pub fn render_upcoming(items: &[UpcomingItemView]) {
+  if items.is_empty() {
+    println!("{}", "Nenhuma data próxima. Use `arca dates add <título> <data>`.".dimmed());
+    return;
+  }
+
+  for item in items {
+    let kind = match item.kind {
+      UpcomingKind::Event => "[evento]".cyan(),
+      UpcomingKind::Task => "[tarefa]".blue(),
+      UpcomingKind::Birthday => "[aniv.]".magenta(),
+    };
+    let mut tags: Vec<ColoredString> = vec![
+      item.date_label.as_str().normal(),
+      upcoming_due_tag(item.due_state, item.days_until, &item.due_label),
+    ];
+    if let Some(proj) = &item.project {
+      tags.push(format!("+{proj}").green());
+    }
+    if let Some(group) = &item.group {
+      tags.push(format!("[{group}]").magenta());
+    }
+    if let Some(age) = item.turning_age {
+      tags.push(format!("faz {age} anos").cyan());
+    }
+    if let Some(note) = &item.note {
+      tags.push(note.as_str().dimmed());
+    }
+    println!("{} {} {}  {}", format!("#{}", item.id).purple(), kind, item.title, join_tags(tags));
   }
 }
 

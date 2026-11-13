@@ -57,6 +57,78 @@ export interface ProjectView {
   done: number;
 }
 
+export type UpcomingKind = "event" | "task" | "birthday";
+
+export interface UpcomingItemView {
+  id: number;
+  kind: UpcomingKind;
+  title: string;
+  date: string;
+  date_label: string;
+  days_until: number;
+  due_label: string;
+  due_state: "overdue" | "today" | "upcoming";
+  project: string | null;
+  group: string | null;
+  note: string | null;
+  task_status: string | null;
+  turning_age: number | null;
+}
+
+export interface BirthdayView {
+  id: number;
+  name: string;
+  group: string;
+  month: number;
+  day: number;
+  year: number | null;
+  note: string | null;
+  date_label: string;
+  next_date: string;
+  days_until: number;
+  due_label: string;
+  due_state: "overdue" | "today" | "upcoming";
+  turning_age: number | null;
+}
+
+export interface DatesOverview {
+  today: string;
+  upcoming: UpcomingItemView[];
+  birthdays: BirthdayView[];
+}
+
+export interface BirthdayInput {
+  name: string;
+  group?: string;
+  month: number;
+  day: number;
+  year?: number;
+  note?: string;
+}
+
+export interface BirthdayChanges {
+  name?: string;
+  group?: string;
+  month?: number;
+  day?: number;
+  year?: number;
+  note?: string;
+}
+
+export interface TrackedDateInput {
+  title: string;
+  date: string;
+  project?: string;
+  note?: string;
+}
+
+export interface TrackedDateChanges {
+  title?: string;
+  date?: string;
+  project?: string;
+  note?: string;
+}
+
 export interface Board {
   today: string;
   shelf: TaskView[];
@@ -65,6 +137,7 @@ export interface Board {
   sessions: SessionView[];
   suggestions: SuggestionView[];
   projects: ProjectView[];
+  upcoming_soon: UpcomingItemView[];
   window_minutes: number;
 }
 
@@ -149,6 +222,13 @@ export const api = {
   setSyncEnabled: (enabled: boolean) => invoke<void>("set_sync_enabled", { enabled }),
   pairing: () => invoke<{ svg: string; code: string }>("pairing"),
   rotateToken: () => invoke<void>("rotate_token"),
+  datesOverview: (maxDays?: number) => invoke<DatesOverview>("dates_overview", { maxDays }),
+  addBirthday: (input: BirthdayInput) => invoke<number>("add_birthday", { input }),
+  editBirthday: (id: number, changes: BirthdayChanges) => invoke<void>("edit_birthday", { id, changes }),
+  deleteBirthday: (id: number) => invoke<void>("delete_birthday", { id }),
+  addTrackedDate: (input: TrackedDateInput) => invoke<number>("add_tracked_date", { input }),
+  editTrackedDate: (id: number, changes: TrackedDateChanges) => invoke<void>("edit_tracked_date", { id, changes }),
+  deleteTrackedDate: (id: number) => invoke<void>("delete_tracked_date", { id }),
 };
 
 // Cor estável por projeto, derivada do nome (o app do celular usa a mesma conta).
