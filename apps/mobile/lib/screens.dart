@@ -1318,13 +1318,14 @@ class _UpcomingStrip extends StatelessWidget {
               child: LayoutBuilder(builder: (context, constraints) {
                 final textDirection = Directionality.of(context);
                 final textScaler = MediaQuery.textScalerOf(context);
+                final baseStyle = DefaultTextStyle.of(context).style.merge(const TextStyle(fontSize: 12));
                 final candidates = items.take(4).toList();
                 const gap = 6.0;
 
                 double measureChip(UpcomingItemView item) {
                   final tp = TextPainter(
                     text: TextSpan(
-                      style: const TextStyle(fontSize: 12),
+                      style: baseStyle,
                       children: [
                         TextSpan(text: item.title, style: const TextStyle(fontWeight: FontWeight.w500)),
                         TextSpan(
@@ -1340,14 +1341,14 @@ class _UpcomingStrip extends StatelessWidget {
                     maxLines: 1,
                   )..layout();
                   final iconAndBorder = item.kind == 'birthday' ? 20.0 : 0.0;
-                  return tp.width + 20.0 + iconAndBorder;
+                  return (tp.width + 20.0 + iconAndBorder).clamp(0.0, _UpcomingStripChip.maxWidth);
                 }
 
                 double measureMore(int count) {
                   final tp = TextPainter(
                     text: TextSpan(
                       text: '+$count',
-                      style: TextStyle(fontSize: 12, color: c.muted, fontWeight: FontWeight.w600),
+                      style: baseStyle.copyWith(color: c.muted, fontWeight: FontWeight.w600),
                     ),
                     textDirection: textDirection,
                     textScaler: textScaler,
@@ -1404,6 +1405,7 @@ class _UpcomingStrip extends StatelessWidget {
 }
 
 class _UpcomingStripChip extends StatelessWidget {
+  static const double maxWidth = 200.0;
   final UpcomingItemView item;
 
   const _UpcomingStripChip({required this.item});
@@ -1413,42 +1415,48 @@ class _UpcomingStripChip extends StatelessWidget {
     final c = context.arca;
     final isBirthday = item.kind == 'birthday';
     final bdayColor = _birthdayColor(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-      decoration: BoxDecoration(
-        color: isBirthday
-            ? bdayColor.withValues(alpha: item.dueState == 'today' ? 0.22 : 0.14)
-            : item.dueState == 'overdue'
-                ? Theme.of(context).colorScheme.error.withValues(alpha: 0.1)
-                : item.dueState == 'today'
-                    ? c.attentionTint
-                    : c.recessed,
-        borderRadius: BorderRadius.circular(999),
-        border: isBirthday ? Border.all(color: bdayColor.withValues(alpha: 0.35)) : null,
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        if (isBirthday) ...[
-          Icon(Icons.celebration_outlined, size: 14, color: bdayColor),
-          const SizedBox(width: 4),
-        ],
-        Text.rich(
-          TextSpan(children: [
-            TextSpan(
-              text: item.title,
-              style: TextStyle(fontWeight: FontWeight.w500, color: isBirthday ? bdayColor : c.text),
-            ),
-            TextSpan(
-              text: ' · ${item.dueLabel}',
-              style: TextStyle(
-                fontWeight: isBirthday && item.dueState == 'today' ? FontWeight.w700 : null,
-                color: isBirthday ? bdayColor : _upcomingDueColor(context, item.dueState),
-              ),
-            ),
-          ]),
-          style: const TextStyle(fontSize: 12),
-          overflow: TextOverflow.ellipsis,
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: maxWidth),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+        decoration: BoxDecoration(
+          color: isBirthday
+              ? bdayColor.withValues(alpha: item.dueState == 'today' ? 0.22 : 0.14)
+              : item.dueState == 'overdue'
+                  ? Theme.of(context).colorScheme.error.withValues(alpha: 0.1)
+                  : item.dueState == 'today'
+                      ? c.attentionTint
+                      : c.recessed,
+          borderRadius: BorderRadius.circular(999),
+          border: isBirthday ? Border.all(color: bdayColor.withValues(alpha: 0.35)) : null,
         ),
-      ]),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          if (isBirthday) ...[
+            Icon(Icons.celebration_outlined, size: 14, color: bdayColor),
+            const SizedBox(width: 4),
+          ],
+          Flexible(
+            child: Text.rich(
+              TextSpan(children: [
+                TextSpan(
+                  text: item.title,
+                  style: TextStyle(fontWeight: FontWeight.w500, color: isBirthday ? bdayColor : c.text),
+                ),
+                TextSpan(
+                  text: ' · ${item.dueLabel}',
+                  style: TextStyle(
+                    fontWeight: isBirthday && item.dueState == 'today' ? FontWeight.w700 : null,
+                    color: isBirthday ? bdayColor : _upcomingDueColor(context, item.dueState),
+                  ),
+                ),
+              ]),
+              style: const TextStyle(fontSize: 12),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ]),
+      ),
     );
   }
 }
@@ -2016,9 +2024,20 @@ Future<void> showBirthdaySheet(BuildContext context, ArcaStore store, {BirthdayV
                       onPressed: busy
                           ? null
                           : () async {
-                              setSheetState(() => busy = true);
+                              setSheetState(() {
+                                busy = true;
+                                localError = null;
+                              });
                               final ok = await store.deleteBirthday(existing.id);
-                              if (ctx.mounted && ok) Navigator.pop(ctx);
+                              if (!ctx.mounted) return;
+                              if (ok) {
+                                Navigator.pop(ctx);
+                              } else {
+                                setSheetState(() {
+                                  busy = false;
+                                  localError = store.error;
+                                });
+                              }
                             },
                       child: Text('Apagar', style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
                     ),
@@ -2163,9 +2182,20 @@ Future<void> showTrackedDateSheet(BuildContext context, ArcaStore store, {Upcomi
                       onPressed: busy
                           ? null
                           : () async {
-                              setSheetState(() => busy = true);
+                              setSheetState(() {
+                                busy = true;
+                                localError = null;
+                              });
                               final ok = await store.deleteTrackedDate(existing.id);
-                              if (ctx.mounted && ok) Navigator.pop(ctx);
+                              if (!ctx.mounted) return;
+                              if (ok) {
+                                Navigator.pop(ctx);
+                              } else {
+                                setSheetState(() {
+                                  busy = false;
+                                  localError = store.error;
+                                });
+                              }
                             },
                       child: Text('Dispensar', style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
                     ),

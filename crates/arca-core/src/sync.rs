@@ -445,9 +445,7 @@ pub fn apply(db: &Database, set: &ChangeSet, accept_sessions: bool) -> Result<Ap
   for row in &set.birthdays {
     let name = row.name.trim();
     if name.is_empty()
-      || !(1..=12).contains(&row.month)
-      || !(1..=31).contains(&row.day)
-      || chrono::NaiveDate::from_ymd_opt(2024, row.month, row.day).is_none()
+      || dates::validate_birthday(row.month, row.day, row.year, dates::today()).is_err()
     {
       count(false);
       continue;
@@ -890,6 +888,10 @@ mod tests {
           month: 2, day: 30, year: None, note: None, created_at: None, sync_clock: "000002-remote".into(),
         },
         BirthdayRow {
+          uuid: "b-bad-leap-year".into(), name: "AnoNaoBissexto".into(), group: "Amigos".into(),
+          month: 2, day: 29, year: Some(2023), note: None, created_at: None, sync_clock: "000002b-remote".into(),
+        },
+        BirthdayRow {
           uuid: "b-blank-name".into(), name: "   ".into(), group: "Amigos".into(),
           month: 5, day: 10, year: None, note: None, created_at: None, sync_clock: "000003-remote".into(),
         },
@@ -917,7 +919,7 @@ mod tests {
 
     let report = apply(&db, &set, false).unwrap();
     assert_eq!(report.applied, 2);
-    assert_eq!(report.skipped, 5);
+    assert_eq!(report.skipped, 6);
 
     let birthdays = db.get_birthdays().unwrap();
     assert_eq!(birthdays.len(), 1);

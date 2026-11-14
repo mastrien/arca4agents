@@ -398,7 +398,7 @@ enum BirthdayCommands {
         id: i64,
 
         /// New name
-        #[arg(short, long)]
+        #[arg(long)]
         name: Option<String>,
 
         /// New date (DD/MM, DD/MM/AAAA, or AAAA-MM-DD)
@@ -680,5 +680,16 @@ fn log_ping_error(message: &str) {
     let file = std::fs::OpenOptions::new().create(true).append(!too_big).write(true).truncate(too_big).open(&log_path);
     if let Ok(mut file) = file {
         let _ = writeln!(file, "{} {}", dates::now().format(dates::DATETIME_FORMAT), message);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn cli_definition_is_valid() {
+        Cli::command().debug_assert();
     }
 }

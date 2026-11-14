@@ -585,7 +585,7 @@ pub fn edit_birthday(db: &Database, id: i64, changes: &BirthdayChanges) -> Resul
   let day = changes.day.unwrap_or(current.day);
   let resolved_year = match changes.year {
     None => current.year,
-    Some(y) if y <= 0 => None,
+    Some(0) => None,
     Some(y) => Some(y),
   };
   dates::validate_birthday(month, day, resolved_year, dates::today())?;
@@ -850,6 +850,12 @@ mod tests {
     assert_eq!(bdays.len(), 1);
     assert_eq!(bdays[0].group, "Família");
     assert_eq!(bdays[0].turning_age, Some((bday_date.year() - birth_year) as u32));
+
+    assert!(edit_birthday(&db, bday_id, &BirthdayChanges { year: Some(-5), ..Default::default() }).is_err());
+    assert_eq!(db.get_birthday(bday_id).unwrap().year, Some(birth_year));
+    edit_birthday(&db, bday_id, &BirthdayChanges { year: Some(0), ..Default::default() }).unwrap();
+    assert_eq!(db.get_birthday(bday_id).unwrap().year, None);
+    edit_birthday(&db, bday_id, &BirthdayChanges { year: Some(birth_year), ..Default::default() }).unwrap();
 
     let overview = dates_overview(&db, None).unwrap();
     let kinds: Vec<(UpcomingKind, &str)> = overview.upcoming.iter().map(|i| (i.kind, i.title.as_str())).collect();
