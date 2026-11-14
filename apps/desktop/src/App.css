@@ -22,6 +22,9 @@
   --attention-line: #e8c9a8;
   --agent: #3b4aa0;
   --agent-tint: #e9ecfa;
+  --birthday: #b83280;
+  --birthday-tint: color-mix(in srgb, #b83280 14%, transparent);
+  --birthday-line: color-mix(in srgb, #b83280 32%, transparent);
   --idle: #8a918c;
   --danger: #a3261f;
   --shadow: 0 1px 2px rgba(27, 31, 29, 0.05);
@@ -56,6 +59,9 @@
     --attention-line: #5c4026;
     --agent: #a9b4f0;
     --agent-tint: #262b45;
+    --birthday: #f48fb1;
+    --birthday-tint: color-mix(in srgb, #f48fb1 16%, transparent);
+    --birthday-line: color-mix(in srgb, #f48fb1 36%, transparent);
     --idle: #6f7771;
     --danger: #f08b84;
     --shadow: none;
@@ -2017,11 +2023,14 @@ button.link-button:hover {
 
 .upcoming-strip {
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   width: 100%;
-  margin: 0 0 14px;
-  padding: 9px 14px;
+  height: auto;
+  min-height: 48px;
+  margin: 0;
+  padding: 10px 16px;
   border-radius: 12px;
   border: 1px solid var(--line, var(--line-soft));
   background: var(--surface);
@@ -2029,6 +2038,8 @@ button.link-button:hover {
   cursor: pointer;
   text-align: left;
   font: inherit;
+  white-space: nowrap;
+  overflow: hidden;
   transition:
     border-color 0.15s ease,
     background-color 0.15s ease;
@@ -2040,32 +2051,58 @@ button.link-button:hover {
 }
 
 .upcoming-strip-label {
+  flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: 7px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--muted);
   white-space: nowrap;
 }
 
 .upcoming-strip-items {
+  position: relative;
   display: flex;
   flex: 1 1 auto;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
+  overflow: hidden;
+}
+
+.upcoming-strip-measure {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: inline-flex;
+  gap: 8px;
+  width: max-content;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: nowrap;
+  height: 0;
+  overflow: hidden;
 }
 
 .upcoming-chip {
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 9px;
+  padding: 5px 11px;
   border-radius: 999px;
-  font-size: 12px;
+  border: 1px solid transparent;
+  font-size: 13px;
   background: color-mix(in srgb, var(--text) 5%, transparent);
-  max-width: 240px;
+  max-width: 260px;
+}
+
+.upcoming-chip-icon {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
 }
 
 .upcoming-chip-title {
@@ -2098,12 +2135,34 @@ button.link-button:hover {
   font-weight: 600;
 }
 
+.upcoming-chip.kind-birthday {
+  background: var(--birthday-tint);
+  border-color: var(--birthday-line);
+  color: var(--birthday);
+}
+
+.upcoming-chip.kind-birthday .upcoming-chip-icon,
+.upcoming-chip.kind-birthday .upcoming-chip-due {
+  color: var(--birthday);
+}
+
+.upcoming-chip.kind-birthday.due-today {
+  background: color-mix(in srgb, var(--birthday) 22%, transparent);
+  border-color: var(--birthday);
+}
+
+.upcoming-chip.kind-birthday.due-today .upcoming-chip-due {
+  color: var(--birthday);
+  font-weight: 700;
+}
+
 .upcoming-chip-more {
   color: var(--muted);
 }
 
 .upcoming-strip-cta {
-  font-size: 12px;
+  flex: none;
+  font-size: 13px;
   color: var(--accent);
   font-weight: 600;
   white-space: nowrap;
@@ -2262,6 +2321,9 @@ button.link-button:hover {
 
 .kind-badge {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 2px 8px;
   border-radius: 6px;
   font-size: 11px;
@@ -2279,16 +2341,25 @@ button.link-button:hover {
 }
 
 .kind-badge.kind-birthday {
-  background: color-mix(in srgb, #b83280 14%, transparent);
-  color: #b83280;
+  background: var(--birthday-tint);
+  color: var(--birthday);
+}
+
+.birthday-row-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--birthday-tint);
+  color: var(--birthday);
+  flex: none;
 }
 
 @media (prefers-color-scheme: dark) {
   .kind-badge.kind-event {
     color: #6ea8ff;
-  }
-  .kind-badge.kind-birthday {
-    color: #f48fb1;
   }
 }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
@@ -18,7 +18,7 @@ import {
   TaskView,
 } from "./api";
 import Stats from "./Stats";
-import Dates from "./Dates";
+import Dates, { PARTY_HAT_PATHS } from "./Dates";
 import { UpcomingItemView } from "./api";
 import "./App.css";
 
@@ -183,11 +183,11 @@ export default function App() {
           />
         ) : (
           <>
-            <AddBar projects={board.projects} defaultProject={project} onAdd={(input) => run(() => api.addTask(input))} />
-
             {board.upcoming_soon.length > 0 && (
               <UpcomingStrip items={board.upcoming_soon} onOpen={() => setView("dates")} />
             )}
+
+            <AddBar projects={board.projects} defaultProject={project} onAdd={(input) => run(() => api.addTask(input))} />
 
             <div className="layout">
               <section className="columns" aria-label="Quadro">
@@ -265,9 +265,10 @@ const ICONS: Record<string, React.ReactNode> = {
       <path d="M8 2v4M16 2v4M3 10h18" />
     </>
   ),
+  party: PARTY_HAT_PATHS,
 };
 
-function Icon({ name, size = 18 }: { name: keyof typeof ICONS; size?: number }) {
+export function Icon({ name, size = 18 }: { name: keyof typeof ICONS; size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {ICONS[name]}
@@ -275,23 +276,85 @@ function Icon({ name, size = 18 }: { name: keyof typeof ICONS; size?: number }) 
   );
 }
 
+function UpcomingChip({ item }: { item: UpcomingItemView }) {
+  return (
+    <span className={`upcoming-chip kind-${item.kind} due-${item.due_state}`}>
+      {item.kind === "birthday" && (
+        <span className="upcoming-chip-icon">
+          <Icon name="party" size={14} />
+        </span>
+      )}
+      <span className="upcoming-chip-title">{item.title}</span>
+      <span className="upcoming-chip-due">{item.due_label}</span>
+    </span>
+  );
+}
+
 function UpcomingStrip({ items, onOpen }: { items: UpcomingItemView[]; onOpen: () => void }) {
-  const shown = items.slice(0, 4);
+  const candidates = useMemo(() => items.slice(0, 6), [items]);
+  const containerRef = useRef<HTMLSpanElement | null>(null);
+  const measureRef = useRef<HTMLSpanElement | null>(null);
+  const moreMeasureRef = useRef<HTMLSpanElement | null>(null);
+  const [fitCount, setFitCount] = useState<number>(() => Math.min(items.length, 4));
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    const measure = measureRef.current;
+    const moreEl = moreMeasureRef.current;
+    if (!container || !measure || !moreEl) return;
+
+    const recompute = () => {
+      const available = container.clientWidth;
+      const gap = 8;
+      const children = Array.from(measure.children) as HTMLElement[];
+      const moreWidth = moreEl.offsetWidth;
+      let best = 0;
+      for (let k = candidates.length; k >= 0; k--) {
+        let chipsWidth = 0;
+        for (let i = 0; i < k; i++) {
+          chipsWidth += children[i]?.offsetWidth ?? 0;
+        }
+        if (k > 1) chipsWidth += (k - 1) * gap;
+        const hasMore = k < items.length;
+        const total = chipsWidth + (hasMore ? (k > 0 ? gap : 0) + moreWidth : 0);
+        if (total <= available) {
+          best = k;
+          break;
+        }
+      }
+      setFitCount((prev) => (prev === best ? prev : best));
+    };
+
+    recompute();
+    const observer = new ResizeObserver(recompute);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [candidates, items.length]);
+
+  const shown = candidates.slice(0, fitCount);
   const rest = items.length - shown.length;
+
   return (
     <button className="upcoming-strip" type="button" onClick={onOpen} title="Abrir Datas e Aniversários">
       <span className="upcoming-strip-label">
-        <Icon name="calendar" size={14} />
+        <Icon name="calendar" size={16} />
         Próximas datas
       </span>
-      <span className="upcoming-strip-items">
+      <span className="upcoming-strip-items" ref={containerRef}>
         {shown.map((item) => (
-          <span key={`${item.kind}-${item.id}`} className={`upcoming-chip due-${item.due_state}`}>
-            <span className="upcoming-chip-title">{item.title}</span>
-            <span className="upcoming-chip-due">{item.due_label}</span>
-          </span>
+          <UpcomingChip key={`${item.kind}-${item.id}`} item={item} />
         ))}
         {rest > 0 && <span className="upcoming-chip upcoming-chip-more">+{rest}</span>}
+        <span className="upcoming-strip-measure" ref={measureRef} aria-hidden="true">
+          {candidates.map((item) => (
+            <UpcomingChip key={`m-${item.kind}-${item.id}`} item={item} />
+          ))}
+        </span>
+        <span className="upcoming-strip-measure" aria-hidden="true">
+          <span ref={moreMeasureRef} className="upcoming-chip upcoming-chip-more">
+            +{items.length}
+          </span>
+        </span>
       </span>
       <span className="upcoming-strip-cta">Ver tudo →</span>
     </button>

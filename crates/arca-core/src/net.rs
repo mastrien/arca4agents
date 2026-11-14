@@ -214,7 +214,13 @@ pub mod server {
           let usage_since = Some(usage_since.as_str()).filter(|s| *s != "-");
           set.usage = crate::usage::samples_for_sync(db, usage_since, crate::dates::now())?;
         }
-        let rows = set.projects.len() + set.tasks.len() + set.history.len() + set.suggestions.len() + set.tombstones.len();
+        let rows = set.projects.len()
+          + set.tasks.len()
+          + set.history.len()
+          + set.suggestions.len()
+          + set.birthdays.len()
+          + set.tracked_dates.len()
+          + set.tombstones.len();
         Ok((serde_json::to_string(&set)?, Some(Event::Pulled { client, name: name.clone(), rows })))
       }
       _ => anyhow::bail!("rota desconhecida: {path}"),
@@ -328,7 +334,19 @@ pub mod client {
     }
     let pulled = sync::apply(db, &incoming, true)?;
 
-    sync::update_peer_cursors(db, &peer.device, &incoming.cursor, &outgoing.cursor)?;
+    let expected_rows = outgoing.projects.len()
+      + outgoing.tasks.len()
+      + outgoing.history.len()
+      + outgoing.suggestions.len()
+      + outgoing.birthdays.len()
+      + outgoing.tracked_dates.len();
+    let new_pushed = if pushed.applied + pushed.skipped < expected_rows {
+      peer.last_pushed.as_str()
+    } else {
+      outgoing.cursor.as_str()
+    };
+
+    sync::update_peer_cursors(db, &peer.device, &incoming.cursor, new_pushed)?;
     Ok(SyncReport { pushed, pulled })
   }
 

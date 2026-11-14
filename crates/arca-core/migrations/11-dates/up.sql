@@ -32,3 +32,6 @@ BEGIN
   INSERT INTO sync_tombstones (entity, uuid, sync_clock) VALUES ('tracked_date', OLD.uuid, arca_clock())
     ON CONFLICT(entity, uuid) DO UPDATE SET sync_clock = excluded.sync_clock;
 END;
+
+-- Força uma sincronização completa ao atualizar para incluir aniversários e datas já criadas no par.
+UPDATE sync_peers SET last_pulled = '', last_pushed = '';

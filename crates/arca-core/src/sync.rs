@@ -443,6 +443,19 @@ pub fn apply(db: &Database, set: &ChangeSet, accept_sessions: bool) -> Result<Ap
   }
 
   for row in &set.birthdays {
+    let name = row.name.trim();
+    if name.is_empty()
+      || !(1..=12).contains(&row.month)
+      || !(1..=31).contains(&row.day)
+      || chrono::NaiveDate::from_ymd_opt(2024, row.month, row.day).is_none()
+    {
+      count(false);
+      continue;
+    }
+    let group = match row.group.trim() {
+      "" => crate::persistence::DEFAULT_BIRTHDAY_GROUP,
+      other => other,
+    };
     let applied = match local_clock(&tx, "birthdays", &row.uuid)? {
       Some((_, clock)) if clock >= row.sync_clock => false,
       Some((id, _)) => {
@@ -450,7 +463,7 @@ pub fn apply(db: &Database, set: &ChangeSet, accept_sessions: bool) -> Result<Ap
           "UPDATE birthdays SET person_name = ?1, group_name = ?2, birth_month = ?3, birth_day = ?4,
               birth_year = ?5, note = ?6, sync_clock = ?7
             WHERE birthday_id = ?8",
-          params![row.name, row.group, row.month, row.day, row.year, row.note, row.sync_clock, id],
+          params![name, group, row.month, row.day, row.year, row.note, row.sync_clock, id],
         )?;
         true
       }
@@ -459,7 +472,7 @@ pub fn apply(db: &Database, set: &ChangeSet, accept_sessions: bool) -> Result<Ap
         tx.execute(
           "INSERT INTO birthdays (person_name, group_name, birth_month, birth_day, birth_year, note, created_at, uuid, sync_clock)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, COALESCE(?7, DATETIME('now', 'localtime')), ?8, ?9)",
-          params![row.name, row.group, row.month, row.day, row.year, row.note, row.created_at, row.uuid, row.sync_clock],
+          params![name, group, row.month, row.day, row.year, row.note, row.created_at, row.uuid, row.sync_clock],
         )?;
         true
       }
@@ -468,6 +481,13 @@ pub fn apply(db: &Database, set: &ChangeSet, accept_sessions: bool) -> Result<Ap
   }
 
   for row in &set.tracked_dates {
+    let title = row.title.trim();
+    if title.is_empty()
+      || chrono::NaiveDate::parse_from_str(&row.target_date, dates::DATE_FORMAT).is_err()
+    {
+      count(false);
+      continue;
+    }
     let project_id = local_id(&tx, "projects", "project_id", row.project_uuid.as_deref())?;
     let applied = match local_clock(&tx, "tracked_dates", &row.uuid)? {
       Some((_, clock)) if clock >= row.sync_clock => false,
@@ -475,7 +495,7 @@ pub fn apply(db: &Database, set: &ChangeSet, accept_sessions: bool) -> Result<Ap
         tx.execute(
           "UPDATE tracked_dates SET title = ?1, target_date = ?2, project_id = ?3, note = ?4, sync_clock = ?5
             WHERE date_id = ?6",
-          params![row.title, row.target_date, project_id, row.note, row.sync_clock, id],
+          params![title, row.target_date, project_id, row.note, row.sync_clock, id],
         )?;
         true
       }
@@ -484,7 +504,7 @@ pub fn apply(db: &Database, set: &ChangeSet, accept_sessions: bool) -> Result<Ap
         tx.execute(
           "INSERT INTO tracked_dates (title, target_date, project_id, note, created_at, uuid, sync_clock)
             VALUES (?1, ?2, ?3, ?4, COALESCE(?5, DATETIME('now', 'localtime')), ?6, ?7)",
-          params![row.title, row.target_date, project_id, row.note, row.created_at, row.uuid, row.sync_clock],
+          params![title, row.target_date, project_id, row.note, row.created_at, row.uuid, row.sync_clock],
         )?;
         true
       }
@@ -852,5 +872,118 @@ mod tests {
     sync(&phone, &pc, &mut cursors);
     assert!(pc.get_tracked_dates(None).unwrap().is_empty());
     assert!(phone.get_tracked_dates(None).unwrap().is_empty());
+  }
+
+  #[test]
+  fn malformed_birthdays_and_tracked_dates_are_skipped() {
+    let db = Database::open_in_memory().unwrap();
+    let set = ChangeSet {
+      device: "remote".into(),
+      cursor: "000010-remote".into(),
+      birthdays: vec![
+        BirthdayRow {
+          uuid: "b-bad-month".into(), name: "Mes".into(), group: "Amigos".into(),
+          month: 13, day: 1, year: None, note: None, created_at: None, sync_clock: "000001-remote".into(),
+        },
+        BirthdayRow {
+          uuid: "b-bad-day".into(), name: "Fev".into(), group: "Amigos".into(),
+          month: 2, day: 30, year: None, note: None, created_at: None, sync_clock: "000002-remote".into(),
+        },
+        BirthdayRow {
+          uuid: "b-blank-name".into(), name: "   ".into(), group: "Amigos".into(),
+          month: 5, day: 10, year: None, note: None, created_at: None, sync_clock: "000003-remote".into(),
+        },
+        BirthdayRow {
+          uuid: "b-ok".into(), name: "  Joao ".into(), group: "   ".into(),
+          month: 2, day: 29, year: Some(1996), note: None, created_at: None, sync_clock: "000004-remote".into(),
+        },
+      ],
+      tracked_dates: vec![
+        TrackedDateRow {
+          uuid: "d-bad-date".into(), title: "Invalida".into(), target_date: "2026-99-99".into(),
+          project_uuid: None, note: None, created_at: None, sync_clock: "000005-remote".into(),
+        },
+        TrackedDateRow {
+          uuid: "d-blank-title".into(), title: "  ".into(), target_date: "2026-12-20".into(),
+          project_uuid: None, note: None, created_at: None, sync_clock: "000006-remote".into(),
+        },
+        TrackedDateRow {
+          uuid: "d-ok".into(), title: " Entrega ".into(), target_date: "2026-12-20".into(),
+          project_uuid: None, note: None, created_at: None, sync_clock: "000007-remote".into(),
+        },
+      ],
+      ..Default::default()
+    };
+
+    let report = apply(&db, &set, false).unwrap();
+    assert_eq!(report.applied, 2);
+    assert_eq!(report.skipped, 5);
+
+    let birthdays = db.get_birthdays().unwrap();
+    assert_eq!(birthdays.len(), 1);
+    assert_eq!(birthdays[0].name, "Joao");
+    assert_eq!(birthdays[0].group, crate::persistence::DEFAULT_BIRTHDAY_GROUP);
+
+    let tracked = db.get_tracked_dates(None).unwrap();
+    assert_eq!(tracked.len(), 1);
+    assert_eq!(tracked[0].title, "Entrega");
+  }
+
+  #[test]
+  fn legacy_changeset_and_migration_11_upgrade_work() {
+    let legacy_json = serde_json::json!({
+      "device": "old-pc",
+      "cursor": "000005-old-pc",
+      "projects": [],
+      "tasks": [{
+        "uuid": "t-legacy",
+        "title": "Da versao antiga",
+        "status": "CART",
+        "daily": false,
+        "created_at": null,
+        "updated_at": null,
+        "due_date": null,
+        "done_at": null,
+        "project_uuid": null,
+        "created_by": "user",
+        "sync_clock": "000005-old-pc"
+      }],
+      "history": [],
+      "suggestions": [],
+      "tombstones": [],
+      "sessions": []
+    }).to_string();
+    let set: ChangeSet = serde_json::from_str(&legacy_json).unwrap();
+    let mem = Database::open_in_memory().unwrap();
+    let report = apply(&mem, &set, false).unwrap();
+    assert_eq!(report.applied, 1);
+    assert_eq!(mem.get_tasks(Default::default()).unwrap()[0].title, "Da versao antiga");
+
+    let dir = std::env::temp_dir().join(format!("arca-m11-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let db_path = dir.join("upgrade.db");
+    let _ = std::fs::remove_file(&db_path);
+
+    {
+      static MIGRATIONS_DIR: include_dir::Dir<'_> = include_dir::include_dir!("$CARGO_MANIFEST_DIR/migrations");
+      let migrations = rusqlite_migration::Migrations::from_directory(&MIGRATIONS_DIR).unwrap();
+      let mut conn = rusqlite::Connection::open(&db_path).unwrap();
+      let flags = rusqlite::functions::FunctionFlags::SQLITE_UTF8;
+      conn.create_scalar_function("arca_uuid", 0, flags, |_| Ok(uuid::Uuid::new_v4().to_string())).unwrap();
+      conn.create_scalar_function("arca_clock", 0, flags, |_| Ok("000001-test".to_string())).unwrap();
+      migrations.to_version(&mut conn, 9).unwrap();
+      conn.execute(
+        "INSERT INTO sync_peers (peer_device, name, url, token, last_pulled, last_pushed)
+          VALUES ('peer-1', 'Celular', 'http://127.0.0.1:7377', 'tok', '000010-peer', '000020-local')",
+        [],
+      ).unwrap();
+    }
+
+    let upgraded = Database::init(&db_path).unwrap();
+    let peer = peers(&upgraded).unwrap().remove(0);
+    assert_eq!(peer.last_pulled, "");
+    assert_eq!(peer.last_pushed, "");
+    drop(upgraded);
+    let _ = std::fs::remove_dir_all(&dir);
   }
 }

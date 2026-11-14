@@ -1277,6 +1277,9 @@ void openProjects(BuildContext context, ArcaStore store) {
 
 // ---------- Datas e Aniversários ----------
 
+Color _birthdayColor(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark ? const Color(0xFFF48FB1) : const Color(0xFFB83280);
+
 Color _upcomingDueColor(BuildContext context, String dueState) {
   final c = context.arca;
   return switch (dueState) {
@@ -1296,8 +1299,6 @@ class _UpcomingStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.arca;
     final hasUrgent = items.any((i) => i.dueState == 'overdue' || i.dueState == 'today');
-    final shown = items.take(3).toList();
-    final rest = items.length - shown.length;
 
     return Material(
       color: c.surface,
@@ -1314,43 +1315,140 @@ class _UpcomingStrip extends StatelessWidget {
             Icon(Icons.event_outlined, size: 17, color: hasUrgent ? c.attention : c.accent),
             const SizedBox(width: 8),
             Expanded(
-              child: Wrap(
-                spacing: 6,
-                runSpacing: 4,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  for (final item in shown)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: item.dueState == 'overdue'
-                            ? Theme.of(context).colorScheme.error.withValues(alpha: 0.1)
-                            : item.dueState == 'today'
-                                ? c.attentionTint
-                                : c.recessed,
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text.rich(
-                        TextSpan(children: [
-                          TextSpan(text: item.title, style: const TextStyle(fontWeight: FontWeight.w500)),
-                          TextSpan(
-                            text: ' · ${item.dueLabel}',
-                            style: TextStyle(color: _upcomingDueColor(context, item.dueState)),
+              child: LayoutBuilder(builder: (context, constraints) {
+                final textDirection = Directionality.of(context);
+                final textScaler = MediaQuery.textScalerOf(context);
+                final candidates = items.take(4).toList();
+                const gap = 6.0;
+
+                double measureChip(UpcomingItemView item) {
+                  final tp = TextPainter(
+                    text: TextSpan(
+                      style: const TextStyle(fontSize: 12),
+                      children: [
+                        TextSpan(text: item.title, style: const TextStyle(fontWeight: FontWeight.w500)),
+                        TextSpan(
+                          text: ' · ${item.dueLabel}',
+                          style: TextStyle(
+                            fontWeight: item.kind == 'birthday' && item.dueState == 'today' ? FontWeight.w700 : null,
                           ),
-                        ]),
-                        style: const TextStyle(fontSize: 12),
+                        ),
+                      ],
+                    ),
+                    textDirection: textDirection,
+                    textScaler: textScaler,
+                    maxLines: 1,
+                  )..layout();
+                  final iconAndBorder = item.kind == 'birthday' ? 20.0 : 0.0;
+                  return tp.width + 20.0 + iconAndBorder;
+                }
+
+                double measureMore(int count) {
+                  final tp = TextPainter(
+                    text: TextSpan(
+                      text: '+$count',
+                      style: TextStyle(fontSize: 12, color: c.muted, fontWeight: FontWeight.w600),
+                    ),
+                    textDirection: textDirection,
+                    textScaler: textScaler,
+                    maxLines: 1,
+                  )..layout();
+                  return tp.width;
+                }
+
+                final widths = [for (final item in candidates) measureChip(item)];
+                var fitCount = 0;
+                for (var k = candidates.length; k >= 0; k--) {
+                  var total = 0.0;
+                  for (var i = 0; i < k; i++) {
+                    total += widths[i];
+                  }
+                  if (k > 1) total += (k - 1) * gap;
+                  final remaining = items.length - k;
+                  if (remaining > 0) {
+                    total += (k > 0 ? gap : 0) + measureMore(remaining);
+                  }
+                  if (total <= constraints.maxWidth) {
+                    fitCount = k;
+                    break;
+                  }
+                }
+
+                final visible = candidates.take(fitCount).toList();
+                final restCount = items.length - visible.length;
+
+                return Row(children: [
+                  for (var i = 0; i < visible.length; i++) ...[
+                    if (i > 0) const SizedBox(width: gap),
+                    _UpcomingStripChip(item: visible[i]),
+                  ],
+                  if (restCount > 0) ...[
+                    if (visible.isNotEmpty) const SizedBox(width: gap),
+                    Flexible(
+                      child: Text(
+                        '+$restCount',
                         overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 12, color: c.muted, fontWeight: FontWeight.w600),
                       ),
                     ),
-                  if (rest > 0)
-                    Text('+$rest', style: TextStyle(fontSize: 12, color: c.muted, fontWeight: FontWeight.w600)),
-                ],
-              ),
+                  ],
+                ]);
+              }),
             ),
             Icon(Icons.chevron_right, size: 18, color: c.muted),
           ]),
         ),
       ),
+    );
+  }
+}
+
+class _UpcomingStripChip extends StatelessWidget {
+  final UpcomingItemView item;
+
+  const _UpcomingStripChip({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.arca;
+    final isBirthday = item.kind == 'birthday';
+    final bdayColor = _birthdayColor(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: isBirthday
+            ? bdayColor.withValues(alpha: item.dueState == 'today' ? 0.22 : 0.14)
+            : item.dueState == 'overdue'
+                ? Theme.of(context).colorScheme.error.withValues(alpha: 0.1)
+                : item.dueState == 'today'
+                    ? c.attentionTint
+                    : c.recessed,
+        borderRadius: BorderRadius.circular(999),
+        border: isBirthday ? Border.all(color: bdayColor.withValues(alpha: 0.35)) : null,
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        if (isBirthday) ...[
+          Icon(Icons.celebration_outlined, size: 14, color: bdayColor),
+          const SizedBox(width: 4),
+        ],
+        Text.rich(
+          TextSpan(children: [
+            TextSpan(
+              text: item.title,
+              style: TextStyle(fontWeight: FontWeight.w500, color: isBirthday ? bdayColor : c.text),
+            ),
+            TextSpan(
+              text: ' · ${item.dueLabel}',
+              style: TextStyle(
+                fontWeight: isBirthday && item.dueState == 'today' ? FontWeight.w700 : null,
+                color: isBirthday ? bdayColor : _upcomingDueColor(context, item.dueState),
+              ),
+            ),
+          ]),
+          style: const TextStyle(fontSize: 12),
+          overflow: TextOverflow.ellipsis,
+        ),
+      ]),
     );
   }
 }
@@ -1680,10 +1778,11 @@ class _UpcomingRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.arca;
+    final bdayColor = _birthdayColor(context);
     final (badgeText, badgeColor, badgeBg) = switch (item.kind) {
       'event' => ('Evento', c.agent, c.agentTint),
       'task' => ('Tarefa', c.accent, c.accentTint),
-      _ => ('Aniv.', const Color(0xFFA82B76), const Color(0xFFA82B76).withValues(alpha: 0.12)),
+      _ => ('Aniv.', bdayColor, bdayColor.withValues(alpha: 0.14)),
     };
 
     return InkWell(
@@ -1694,7 +1793,16 @@ class _UpcomingRow extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
             decoration: BoxDecoration(color: badgeBg, borderRadius: BorderRadius.circular(6)),
-            child: Text(badgeText, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: badgeColor)),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (item.kind == 'birthday') ...[
+                  Icon(Icons.celebration_outlined, size: 13, color: badgeColor),
+                  const SizedBox(width: 4),
+                ],
+                Text(badgeText, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: badgeColor)),
+              ],
+            ),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -1753,11 +1861,22 @@ class _BirthdayRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.arca;
+    final bdayColor = _birthdayColor(context);
     return InkWell(
       onTap: onTap,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
         child: Row(children: [
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: bdayColor.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(Icons.celebration_outlined, size: 16, color: bdayColor),
+          ),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(children: [

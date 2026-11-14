@@ -25,6 +25,24 @@ const KIND_LABELS: Record<UpcomingKind, string> = {
   birthday: "Aniversário",
 };
 
+export const PARTY_HAT_PATHS = (
+  <>
+    <circle cx="12" cy="3" r="1.3" />
+    <path d="M12 4.3L5 19c4.5 2 9.5 2 14 0L12 4.3z" />
+    <path d="M8.5 12c2.3 1 4.7 1 7 0" />
+    <path d="M7 15.5c3.3 1.2 6.7 1.2 10 0" />
+    <path d="M4 6l1.5 1.5M20 6l-1.5 1.5M3.5 11H5M19 11h1.5" />
+  </>
+);
+
+function PartyHatIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {PARTY_HAT_PATHS}
+    </svg>
+  );
+}
+
 interface BirthdayFormState {
   mode: "add" | "edit";
   id?: number;
@@ -445,7 +463,10 @@ export default function Dates({ projects, onBack, onBoardChanged, initialTab = "
                           : undefined;
                       return (
                         <div key={`${item.kind}-${item.id}`} className="dates-row">
-                          <span className={`kind-badge kind-${item.kind}`}>{KIND_LABELS[item.kind]}</span>
+                          <span className={`kind-badge kind-${item.kind}`}>
+                            {item.kind === "birthday" && <PartyHatIcon size={13} />}
+                            {KIND_LABELS[item.kind]}
+                          </span>
                           <div className="dates-row-main">
                             <div className="dates-row-top">
                               <span className="dates-row-title">{item.title}</span>
@@ -761,6 +782,9 @@ function BirthdayRow({
 }) {
   return (
     <div className="dates-row">
+      <span className="birthday-row-icon">
+        <PartyHatIcon size={16} />
+      </span>
       <div className="dates-row-main">
         <div className="dates-row-top">
           <span className="dates-row-title">{item.name}</span>
