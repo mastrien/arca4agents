@@ -12,6 +12,86 @@ import 'theme.dart';
 
 // ---------- Peças comuns ----------
 
+class ArcaMark extends StatelessWidget {
+  final double size;
+  const ArcaMark({super.key, this.size = 26});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.arca;
+    return CustomPaint(
+      size: Size.square(size),
+      painter: _ArcaMarkPainter(ground: c.ground, accent: c.accent),
+    );
+  }
+}
+
+class _ArcaMarkPainter extends CustomPainter {
+  final Color ground;
+  final Color accent;
+
+  const _ArcaMarkPainter({required this.ground, required this.accent});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.scale(size.width / 12.7, size.height / 12.7);
+
+    const center = Offset(6.3499999, 6.3499999);
+    const circleRadius = 4.9857421;
+    canvas.drawCircle(center, circleRadius, Paint()..color = ground);
+    canvas.drawCircle(
+      center,
+      circleRadius,
+      Paint()
+        ..color = accent
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.352,
+    );
+
+    const r = Radius.circular(1.7202544);
+    final rightLeaf = Path()
+      ..moveTo(8.3761448, 5.9760613)
+      ..arcToPoint(const Offset(7.1707552, 6.4703316), radius: r, largeArc: false, clockwise: false)
+      ..arcToPoint(const Offset(8.3761448, 6.9646019), radius: r, largeArc: false, clockwise: false)
+      ..arcToPoint(const Offset(9.4828015, 6.5599786), radius: r, largeArc: false, clockwise: false)
+      ..lineTo(11.274532, 6.513338)
+      ..lineTo(9.5809287, 6.4697259)
+      ..arcToPoint(const Offset(8.3761448, 5.9760613), radius: r, largeArc: false, clockwise: false)
+      ..close();
+
+    final leftLeaf = Path()
+      ..moveTo(4.3601986, 5.9760613)
+      ..arcToPoint(const Offset(3.1566261, 6.4685144), radius: r, largeArc: false, clockwise: false)
+      ..lineTo(1.4254685, 6.513338)
+      ..lineTo(3.2535419, 6.5605844)
+      ..arcToPoint(const Offset(3.2541475, 6.5611902), radius: r, largeArc: false, clockwise: false)
+      ..arcToPoint(const Offset(4.3601986, 6.9646019), radius: r, largeArc: false, clockwise: false)
+      ..arcToPoint(const Offset(5.5655882, 6.4703316), radius: r, largeArc: false, clockwise: false)
+      ..arcToPoint(const Offset(4.3601986, 5.9760613), radius: r, largeArc: false, clockwise: false)
+      ..close();
+
+    final topLeaf = Path()
+      ..moveTo(6.3681717, 3.2569689)
+      ..arcToPoint(const Offset(5.8739013, 4.4623585), radius: r, largeArc: false, clockwise: false)
+      ..arcToPoint(const Offset(6.2894276, 5.582341), radius: r, largeArc: false, clockwise: false)
+      ..lineTo(6.3681712, 8.6170156)
+      ..lineTo(6.4469148, 5.582341)
+      ..arcToPoint(const Offset(6.862442, 4.4623585), radius: r, largeArc: false, clockwise: false)
+      ..arcToPoint(const Offset(6.3681717, 3.2569689), radius: r, largeArc: false, clockwise: false)
+      ..close();
+
+    final leafPaint = Paint()..color = accent;
+    canvas.drawPath(rightLeaf, leafPaint);
+    canvas.drawPath(leftLeaf, leafPaint);
+    canvas.drawPath(topLeaf, leafPaint);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_ArcaMarkPainter oldDelegate) => oldDelegate.ground != ground || oldDelegate.accent != accent;
+}
+
 class ProjectDot extends StatelessWidget {
   final String name;
   final double size;
@@ -146,6 +226,8 @@ class TasksScreen extends StatelessWidget {
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 10, 6, 10),
         child: Row(children: [
+          const ArcaMark(),
+          const SizedBox(width: 8),
           Text.rich(
             TextSpan(children: [
               const TextSpan(text: 'Arca'),
