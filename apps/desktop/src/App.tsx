@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, Update } from "@tauri-apps/plugin-updater";
 import {
@@ -18,7 +19,8 @@ import {
   TaskView,
 } from "./api";
 import Stats from "./Stats";
-import Dates, { PARTY_HAT_PATHS } from "./Dates";
+import Dates, { DatesFocusRequest, PARTY_HAT_PATHS } from "./Dates";
+import { CommandPalette, PaletteButton, PaletteCommand, useCommandPaletteShortcut } from "./CommandPalette";
 import { UpcomingItemView } from "./api";
 import "./App.css";
 
@@ -44,11 +46,24 @@ export default function App() {
   const [authors, setAuthors] = useState<Authors>(() => (localStorage.getItem(AUTHORS_KEY) as Authors) || "all");
   const [modal, setModal] = useState<Modal>(null);
   const [view, setView] = useState<"board" | "stats" | "dates">("board");
+  const [datesInitialTab, setDatesInitialTab] = useState<"upcoming" | "birthdays">("upcoming");
+  const [datesRequest, setDatesRequest] = useState<DatesFocusRequest>({ seq: 0, target: "upcoming" });
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [version, setVersion] = useState<string | null>(null);
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});
   }, []);
   const [error, setError] = useState<string | null>(null);
+
+  const togglePalette = useCallback(() => setPaletteOpen((open) => !open), []);
+  useCommandPaletteShortcut(togglePalette);
+
+  useEffect(() => {
+    if (view !== "dates" && (datesRequest.seq !== 0 || datesInitialTab !== "upcoming")) {
+      setDatesRequest({ seq: 0, target: "upcoming" });
+      setDatesInitialTab("upcoming");
+    }
+  }, [view, datesRequest.seq, datesInitialTab]);
 
   const refresh = useCallback(async () => {
     try {
@@ -82,14 +97,233 @@ export default function App() {
     [refresh],
   );
 
+  const focusElement = useCallback((id: string) => {
+    requestAnimationFrame(() =>
+      setTimeout(() => {
+        const el = document.getElementById(id) as HTMLInputElement | null;
+        el?.focus();
+        el?.select?.();
+      }, 0),
+    );
+  }, []);
+
+  const openDatesWith = useCallback((target: DatesFocusRequest["target"]) => {
+    setModal(null);
+    setDatesInitialTab(target === "birthdays" || target === "add-birthday" ? "birthdays" : "upcoming");
+    setView("dates");
+    setDatesRequest((prev) => ({ seq: prev.seq + 1, target }));
+  }, []);
+
+  const paletteCommands = useMemo<PaletteCommand[]>(() => {
+    const activeTasks = new Map<number, TaskView>();
+    for (const t of [...(board?.cart ?? []), ...(board?.shelf ?? [])]) {
+      if (!activeTasks.has(t.id)) activeTasks.set(t.id, t);
+    }
+
+    return [
+      {
+        id: "focus:new-task",
+        group: "Criar e focar",
+        label: "Nova tarefa (focar no campo de tarefa)",
+        hint: "Quadro",
+        keywords: "adicionar criar tarefa carrinho estante input",
+        icon: "plus",
+        run: () => {
+          setModal(null);
+          setView("board");
+          focusElement("nova");
+        },
+      },
+      {
+        id: "focus:new-event",
+        group: "Criar e focar",
+        label: "Novo evento ou data (focar no formulário)",
+        hint: "Datas",
+        keywords: "adicionar criar data evento prazo calendario input",
+        icon: "calendar",
+        run: () => openDatesWith("add-event"),
+      },
+      {
+        id: "focus:new-birthday",
+        group: "Criar e focar",
+        label: "Novo aniversário (abrir formulário)",
+        hint: "Aniversários",
+        keywords: "adicionar criar aniversario festa pessoa natalicio input",
+        icon: "party",
+        run: () => openDatesWith("add-birthday"),
+      },
+      {
+        id: "focus:new-project",
+        group: "Criar e focar",
+        label: "Novo projeto (focar no campo de projeto)",
+        hint: "Projetos",
+        keywords: "adicionar criar projeto pasta",
+        icon: "folder",
+        run: () => {
+          setModal({ kind: "projects" });
+          focusElement("novo-projeto-nome");
+        },
+      },
+      {
+        id: "nav:board",
+        group: "Ir para",
+        label: "Ir para o Quadro",
+        hint: "Estante e carrinho",
+        keywords: "inicio home tarefas quadro",
+        icon: "board",
+        run: () => {
+          setModal(null);
+          setView("board");
+        },
+      },
+      {
+        id: "nav:dates-upcoming",
+        group: "Ir para",
+        label: "Ir para Próximas datas",
+        hint: "Eventos, tarefas com prazo e aniversários",
+        keywords: "agenda calendario datas eventos",
+        icon: "calendar",
+        run: () => openDatesWith("upcoming"),
+      },
+      {
+        id: "nav:dates-birthdays",
+        group: "Ir para",
+        label: "Ir para Aniversários",
+        hint: "Lista de aniversários por mês e grupo",
+        keywords: "aniversarios festas datas",
+        icon: "party",
+        run: () => openDatesWith("birthdays"),
+      },
+      {
+        id: "nav:stats",
+        group: "Ir para",
+        label: "Ir para Gráficos e estatísticas",
+        hint: "Ritmo, projetos e sessões",
+        keywords: "estatisticas graficos relatorio metricas",
+        icon: "chart",
+        run: () => {
+          setModal(null);
+          setView("stats");
+        },
+      },
+      {
+        id: "nav:projects",
+        group: "Ir para",
+        label: "Abrir Projetos",
+        hint: "Gerenciar projetos, políticas e pastas",
+        keywords: "projetos pastas politicas",
+        icon: "folder",
+        run: () => setModal({ kind: "projects" }),
+      },
+      {
+        id: "nav:history",
+        group: "Ir para",
+        label: "Abrir Histórico",
+        hint: "Tarefas concluídas",
+        keywords: "historico feitas concluidas arquivo",
+        icon: "history",
+        run: () => setModal({ kind: "history" }),
+      },
+      {
+        id: "nav:sync",
+        group: "Ir para",
+        label: "Abrir Sincronização",
+        hint: "Parear celular e QR code",
+        keywords: "sincronizacao sync celular mobile qr wifi",
+        icon: "sync",
+        run: () => setModal({ kind: "sync" }),
+      },
+      {
+        id: "filter:author-user",
+        group: "Filtrar quadro",
+        label: "Ver tarefas: Você",
+        hint: authors === "user" ? "Ativo" : "Apenas suas tarefas",
+        keywords: "filtro autor voce minhas",
+        icon: "filter",
+        run: () => {
+          setModal(null);
+          setView("board");
+          setAuthors("user");
+        },
+      },
+      {
+        id: "filter:author-all",
+        group: "Filtrar quadro",
+        label: "Ver tarefas: Tudo",
+        hint: authors === "all" ? "Ativo" : "Suas tarefas e de agentes",
+        keywords: "filtro autor tudo todos mais agentes",
+        icon: "filter",
+        run: () => {
+          setModal(null);
+          setView("board");
+          setAuthors("all");
+        },
+      },
+      {
+        id: "filter:author-agents",
+        group: "Filtrar quadro",
+        label: "Ver tarefas: Agentes",
+        hint: authors === "agents" ? "Ativo" : "Apenas tarefas de agentes",
+        keywords: "filtro autor agentes ia so agentes",
+        icon: "filter",
+        run: () => {
+          setModal(null);
+          setView("board");
+          setAuthors("agents");
+        },
+      },
+      {
+        id: "filter:project-all",
+        group: "Filtrar quadro",
+        label: "Filtrar projeto: Todos os projetos",
+        hint: project === "" ? "Ativo" : "Limpar filtro de projeto",
+        keywords: "filtro todos projetos limpar",
+        icon: "filter",
+        run: () => {
+          setModal(null);
+          setView("board");
+          setProject("");
+        },
+      },
+      ...(board?.projects ?? []).map<PaletteCommand>((p) => ({
+        id: `project:${p.id}`,
+        group: "Projetos",
+        label: `Filtrar projeto: ${p.name}`,
+        hint: `estante ${p.shelf} · carrinho ${p.cart}`,
+        keywords: `projeto ${p.name}`,
+        icon: "folder",
+        run: () => {
+          setModal(null);
+          setView("board");
+          setProject(p.name);
+        },
+      })),
+      ...Array.from(activeTasks.values()).map<PaletteCommand>((t) => ({
+        id: `task:${t.id}`,
+        group: "Tarefas ativas",
+        label: `Editar #${t.id}: ${t.title}`,
+        hint: `${t.project ?? "sem projeto"} · ${t.status === "CART" ? "carrinho" : "estante"}`,
+        keywords: `tarefa ${t.id} ${t.title} ${t.project ?? ""}`,
+        icon: "edit",
+        run: () => setModal({ kind: "edit", task: t }),
+      })),
+    ];
+  }, [authors, board, focusElement, openDatesWith, project]);
+
   if (!board) {
-    return <div className="loading">{error ?? "Abrindo o Arca…"}</div>;
+    return (
+      <div className="app">
+        <WindowTitleBar onOpenPalette={togglePalette} />
+        <div className="loading">{error ?? "Abrindo o Arca…"}</div>
+      </div>
+    );
   }
 
   const edit = (task: TaskView) => setModal({ kind: "edit", task });
 
   return (
     <div className={`app ${view === "board" ? "board-view" : ""}`}>
+      <WindowTitleBar onOpenPalette={togglePalette} />
       <header className="topbar">
         <div className="brand">
           <ArcaMark />
@@ -178,6 +412,8 @@ export default function App() {
         ) : view === "dates" ? (
           <Dates
             projects={board.projects}
+            initialTab={datesInitialTab}
+            focusRequest={datesRequest}
             onBack={() => setView("board")}
             onBoardChanged={() => run(async () => {})}
           />
@@ -208,15 +444,121 @@ export default function App() {
       {modal?.kind === "projects" && <Projects projects={board.projects} onClose={() => setModal(null)} run={run} />}
       {modal?.kind === "sync" && <Sync onClose={() => setModal(null)} />}
       {modal?.kind === "history" && <History onClose={() => setModal(null)} />}
+      {paletteOpen && <CommandPalette commands={paletteCommands} onClose={() => setPaletteOpen(false)} />}
     </div>
   );
 }
 
 // ---------- Peças pequenas ----------
 
-function ArcaMark() {
+function WindowTitleBar({ onOpenPalette }: { onOpenPalette: () => void }) {
+  const [maximized, setMaximized] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    try {
+      const appWindow = getCurrentWindow();
+      appWindow
+        .isMaximized()
+        .then((value) => {
+          if (active) setMaximized(value);
+        })
+        .catch(() => {});
+      appWindow
+        .onResized(() => {
+          appWindow
+            .isMaximized()
+            .then((value) => {
+              if (active) setMaximized(value);
+            })
+            .catch(() => {});
+        })
+        .then((fn) => {
+          if (active) unlisten = fn;
+          else fn();
+        })
+        .catch(() => {});
+    } catch {
+      // Ignora fora do runtime do Tauri (ex.: preview em navegador).
+    }
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
+
+  const runWindowAction = (action: (win: ReturnType<typeof getCurrentWindow>) => Promise<void>) => {
+    try {
+      action(getCurrentWindow()).catch(() => {});
+    } catch {
+      // Ignora fora do runtime do Tauri.
+    }
+  };
+
   return (
-    <svg className="mark" width="28" height="28" viewBox="0 0 12.7 12.7" aria-hidden="true">
+    <div className="window-titlebar" data-tauri-drag-region>
+      <div className="window-titlebar__brand" data-tauri-drag-region>
+        <ArcaMark size={16} />
+        <span className="window-titlebar__title" data-tauri-drag-region>
+          Arca4agents
+        </span>
+      </div>
+
+      <div className="window-titlebar__spacer" data-tauri-drag-region />
+
+      <PaletteButton onOpen={onOpenPalette} />
+
+      <div className="window-controls">
+        <button
+          type="button"
+          className="window-control"
+          aria-label="Minimizar"
+          title="Minimizar"
+          onClick={() => runWindowAction((w) => w.minimize())}
+        >
+          <svg width={10} height={10} viewBox="0 0 10 10" aria-hidden="true">
+            <line x1="0" y1="5" x2="10" y2="5" stroke="currentColor" strokeWidth="1" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          className="window-control"
+          aria-label={maximized ? "Restaurar" : "Maximizar"}
+          title={maximized ? "Restaurar" : "Maximizar"}
+          onClick={() => runWindowAction((w) => w.toggleMaximize())}
+        >
+          {maximized ? (
+            <svg width={10} height={10} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1" aria-hidden="true">
+              <rect x="0.5" y="2.5" width="7" height="7" />
+              <path d="M2.5 2.5V0.5H9.5V7.5H7.5" />
+            </svg>
+          ) : (
+            <svg width={10} height={10} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1" aria-hidden="true">
+              <rect x="0.5" y="0.5" width="9" height="9" />
+            </svg>
+          )}
+        </button>
+        <button
+          type="button"
+          className="window-control close"
+          aria-label="Fechar"
+          title="Fechar"
+          onClick={() => runWindowAction((w) => w.close())}
+        >
+          <svg width={10} height={10} viewBox="0 0 10 10" stroke="currentColor" strokeWidth="1.1" aria-hidden="true">
+            <line x1="1" y1="1" x2="9" y2="9" />
+            <line x1="9" y1="1" x2="1" y2="9" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ArcaMark({ size = 28 }: { size?: number }) {
+  return (
+    <svg className="mark" width={size} height={size} viewBox="0 0 12.7 12.7" aria-hidden="true">
       <circle
         cx="6.3499999"
         cy="6.3499999"
@@ -908,7 +1250,7 @@ function Projects({ projects, onClose, run }: { projects: ProjectView[]; onClose
           setName("");
         }}
       >
-        <input className="grow" placeholder="Novo projeto" value={name} onChange={(e) => setName(e.target.value)} aria-label="Nome do novo projeto" />
+        <input id="novo-projeto-nome" className="grow" placeholder="Novo projeto" value={name} onChange={(e) => setName(e.target.value)} aria-label="Nome do novo projeto" />
         <select value={policy} onChange={(e) => setPolicy(e.target.value as Policy)} aria-label="Política de agentes">
           {(Object.keys(POLICY_LABEL) as Policy[]).map((p) => (
             <option key={p} value={p}>

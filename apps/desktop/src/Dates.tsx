@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   BirthdayView,
@@ -9,11 +9,17 @@ import {
   UpcomingKind,
 } from "./api";
 
+export interface DatesFocusRequest {
+  seq: number;
+  target: "upcoming" | "birthdays" | "add-event" | "add-birthday";
+}
+
 interface DatesProps {
   projects: ProjectView[];
   onBack: () => void;
   onBoardChanged: () => void;
   initialTab?: "upcoming" | "birthdays";
+  focusRequest?: DatesFocusRequest;
 }
 
 type HorizonFilter = "all" | "7" | "30" | "90";
@@ -94,7 +100,7 @@ function horizonSections(items: UpcomingItemView[]): { title: string; items: Upc
     .filter((b) => b.items.length > 0);
 }
 
-export default function Dates({ projects, onBack, onBoardChanged, initialTab = "upcoming" }: DatesProps) {
+export default function Dates({ projects, onBack, onBoardChanged, initialTab = "upcoming", focusRequest }: DatesProps) {
   const [tab, setTab] = useState<"upcoming" | "birthdays">(initialTab);
   const [overview, setOverview] = useState<DatesOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -113,6 +119,9 @@ export default function Dates({ projects, onBack, onBoardChanged, initialTab = "
   const [bdayForm, setBdayForm] = useState<BirthdayFormState | null>(null);
   const [eventForm, setEventForm] = useState<EventFormState | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
+  const eventTitleInputRef = useRef<HTMLInputElement | null>(null);
+  const bdayNameInputRef = useRef<HTMLInputElement | null>(null);
+  const lastHandledSeqRef = useRef(0);
 
   const load = useCallback(async () => {
     try {
@@ -139,6 +148,56 @@ export default function Dates({ projects, onBack, onBoardChanged, initialTab = "
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  useEffect(() => {
+    if (!focusRequest || focusRequest.seq === 0 || focusRequest.seq === lastHandledSeqRef.current) return;
+    lastHandledSeqRef.current = focusRequest.seq;
+
+    if (focusRequest.target === "upcoming") {
+      setTab("upcoming");
+      setBdayForm(null);
+      setEventForm(null);
+      return;
+    }
+
+    if (focusRequest.target === "birthdays") {
+      setTab("birthdays");
+      setBdayForm(null);
+      setEventForm(null);
+      return;
+    }
+
+    if (focusRequest.target === "add-event") {
+      setTab("upcoming");
+      setBdayForm(null);
+      setEventForm(null);
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          eventTitleInputRef.current?.focus();
+          eventTitleInputRef.current?.select();
+        }, 0);
+      });
+      return;
+    }
+
+    if (focusRequest.target === "add-birthday") {
+      setTab("birthdays");
+      setEventForm(null);
+      setModalError(null);
+      setBdayForm({
+        mode: "add",
+        name: "",
+        group: groupFilter || "",
+        dateText: "",
+        note: "",
+      });
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          bdayNameInputRef.current?.focus();
+        }, 0);
+      });
+    }
+  }, [focusRequest, groupFilter]);
 
   const filteredUpcoming = useMemo(() => {
     if (!overview) return [];
@@ -360,6 +419,8 @@ export default function Dates({ projects, onBack, onBoardChanged, initialTab = "
         <>
           <form className="panel dates-quickadd" onSubmit={handleAddEvent}>
             <input
+              id="novo-evento-titulo"
+              ref={eventTitleInputRef}
               type="text"
               placeholder="Nova data ou evento (ex.: Consulta médica, Entrega...)"
               value={newTitle}
@@ -631,6 +692,8 @@ export default function Dates({ projects, onBack, onBoardChanged, initialTab = "
             <label>
               Nome
               <input
+                id="novo-aniversario-nome"
+                ref={bdayNameInputRef}
                 type="text"
                 autoFocus
                 required
